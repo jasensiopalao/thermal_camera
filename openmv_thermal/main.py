@@ -20,7 +20,104 @@
 #OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 #SOFTWARE.
 
-camera_version = "1.3"
+camera_version = "1.6"
+
+# Consumption. ON: 0.6-0.7 Amps. OFF: 350 uAmps
+# script files in main flash pyb.Flash() AttributeError: 'module' object has no attribute 'Flash'
+#         /sd and /flash don't work
+# save only if sd card
+
+import utime as time
+import pyb
+
+import utime
+
+def time_datetime2string():
+    year, month, mday, hour, minute, second, weekday, yearday = utime.localtime()
+    return "{:4d}-{}-{} {:02d}:{:02d}:{:02d}".format(year, month, mday, hour, minute, second)
+
+def tuple_time2rtc(time_tuple):
+    year, month, mday, hour, minute, second, weekday, yearday = time_tuple
+    day = mday
+    weekday = weekday + 1   # weekday is 1-7 for Monday through Sunday """
+    hours = hour
+    minutes = minute
+    seconds = second
+    subseconds = 0
+    return (year, month, day, weekday, hours, minutes, seconds, subseconds)
+
+
+def time_rtc2dictionary(dictionary):
+    year, month, day, weekday, hours, minutes, seconds, subseconds = pyb.RTC().datetime()
+    dictionary["year"] = year
+    dictionary["month"] = month
+    dictionary["day"] = day
+    dictionary["weekday"] = weekday
+    dictionary["hours"] = hours
+    dictionary["minutes"] = minutes
+    dictionary["seconds"] = seconds
+
+
+def time_dictionary2rtc(dictionary):
+    year = dictionary.get("year", 2021)
+    month = dictionary.get("month", 1)
+    day = dictionary.get("day", 14)
+    weekday = dictionary.get("weekday", 4)
+    hours = dictionary.get("hours", 14)
+    minutes = dictionary.get("minutes", 1)
+    seconds = dictionary.get("seconds", 0)
+    subseconds = 0
+    rtc_tuple_base = year, month, day, weekday, hours, minutes, seconds, subseconds
+    pyb.RTC().datetime(rtc_tuple_base)
+
+
+def time_modify_rtc(
+    modify_amount=0, modify_unit=None
+):
+    modify_amount = int(modify_amount)
+    base_time = utime.localtime()
+    year, month, mday, hour, minute, second, weekday, yearday = base_time
+
+    change_time = False
+    if modify_amount != 0:
+        year, month, mday, hour, minute, second, weekday, yearday = base_time
+        if modify_unit == "year":
+            change_time = True
+            year += modify_amount
+        elif modify_unit == "month":
+            change_time = True
+            month += modify_amount
+        elif modify_unit == "day":
+            change_time = True
+            mday += modify_amount
+        elif modify_unit == "hour":
+            change_time = True
+            hour += modify_amount
+        elif modify_unit == "minute":
+            change_time = True
+            minute += modify_amount
+        elif modify_unit == "second":
+            change_time = True
+            second += modify_amount
+        if not change_time:
+            raise NotImplementedError("Wrong unit %s" % modify_unit)
+
+    if change_time:
+        future_time = utime.mktime((year, month, mday, hour, minute, second, weekday, yearday))
+        base_time_target = time.localtime(future_time)
+
+        pyb.RTC().datetime(tuple_time2rtc(base_time_target))
+        base_time_saved = utime.localtime()
+        if base_time_target == base_time_saved:
+            return True
+        else:
+            print("target", base_time_target)
+            print("after", base_time_saved)
+    return False
+
+# (year, month, mday, hour, minute, second, weekday, yearday)
+# weekday is 0-6 for Mon-Sun
+
 
 import gc
 import utime
@@ -39,7 +136,7 @@ class Logger():
     def info(self, *args):
         self.last_print_time = utime.ticks_ms()
         boot_time = utime.ticks_diff(self.last_print_time, self.creation_time)
-        print(boot_time, "Alloc", gc.mem_alloc(), "Free", gc.mem_free() ,": ", *args)
+        print(utime.localtime(utime.time()), "Alloc", gc.mem_alloc(), "Free", gc.mem_free() ,": ", *args)
 
 logger = Logger()
 logger.info("Boot")
@@ -57,13 +154,40 @@ import pyb
 usb = pyb.USB_VCP()
 
 from time import sleep
-from helpers import AuxCamera, InterruptHandler, Touch, TFT, Menu, DynamicSPI, qvga2qvga, qqvga2qvga, Settings
+from helpers import AuxCamera, InterruptHandler, Touch, TFT, Menu, DynamicSPI, qvga2qvga, qqvga2qvga, qqgrey2qvga, Settings
 
 from camera_slave_control import CameraSlaveControl
 
 ###################################################################################################
 # FRAMEWORK   CODE            #####################################################################
 ###################################################################################################
+
+
+def sensor_setup():
+    led_red = LED(1)
+    led_green = LED(2)
+    led_blue = LED(3)
+    led_green.on()
+    led_blue.on()
+    while True:
+        try:
+            sensor.reset()
+            sensor.set_pixformat(sensor.GRAYSCALE)
+            sensor.set_framesize(sensor.QQVGA)
+            sensor.skip_frames(time=1)  # 5000
+            break
+        except Exception as e:
+            logger.info("{}".format(e))
+            led_red.on()
+            led_green.off()
+            led_blue.off()
+            utime.sleep_ms(1000)
+            led_red.off()
+            utime.sleep_ms(1000)
+
+    led_red.off()
+    led_green.off()
+    led_blue.off()
 
 class CameraState():
     PREVIEW = "PREVIEW"
@@ -73,6 +197,7 @@ class CameraState():
 class CameraPreview():
     THERMAL = "THERMAL"
     THERMAL_ANALYSIS = "THERMAL_ANALYSIS"
+    THERMAL_GREY = "THERMAL_GREY"
     VISIBLE = "VISIBLE"
     MIX = "MIX"
 
@@ -106,6 +231,21 @@ class Camera():
     to_save_fb_as_startup = False
 
     always_pixel_pointer = False
+
+    static_range = False
+    static_minimum = 10.0
+    static_maximum = 35.0
+
+    gain_mode = 1
+
+    sceneEmissivity = 0
+    TBkgK = 0
+    tauWindow = 0
+    TWindowK = 0
+    tauAtm = 0
+    TAtmK = 0
+    reflWindow = 0
+    TReflK = 0
 
     def __init__(self, width=320, height=240, alloc_screen_buff=False):
         self.media_path = "DCIM"
@@ -152,6 +292,8 @@ class Camera():
         if self.preview is CameraPreview.THERMAL:
             self.preview = CameraPreview.THERMAL_ANALYSIS
         elif self.preview is CameraPreview.THERMAL_ANALYSIS:
+            self.preview = CameraPreview.THERMAL_GREY
+        elif self.preview is CameraPreview.THERMAL_GREY:
             self.preview = CameraPreview.VISIBLE
         elif self.preview is CameraPreview.VISIBLE:
             self.preview = CameraPreview.MIX
@@ -169,10 +311,13 @@ class Camera():
         try:
             img_name = img_full_names[-1]
             img_name = img_name.split("/")[-1]
-            img_number = int(img_name.split(self.img_format)[0])
+            img_name = img_name.split(self.img_format)[0]
+            img_number_str = img_name.split("_")[0]
+            img_number = int(img_number_str)
         except Exception as e:
             logger.info(e)
 
+        print("Last", img_name, img_number)
         return img_name, img_number
 
     def get_image_files(self):
@@ -219,7 +364,9 @@ class Camera():
     def save_img(self):
         if self.screen_buff:
             self.last_img_number += 1
-            self.last_img_name = "{}/{:04d}{}".format(self.media_path, self.last_img_number, self.img_format)
+            self.last_img_name = "{}/{:04d}_{:d}_{:d}{}".format(
+                self.media_path, self.last_img_number, round(100 * self.temperature_min), round(100 * self.temperature_max), self.img_format
+            )
             logger.info("Saving...", self.last_img_name)
             self.screen_buff.save(self.last_img_name)
             uos.sync()
@@ -240,10 +387,29 @@ class Camera():
         logger.info("RAD FFC Normalization")
         sensor.ioctl(sensor.IOCTL_LEPTON_RUN_COMMAND, 0x4E2E)
 
-    def prepare_thermal_statistics(self):
-        if not self.thermal:
-            return
+    def send_thermal_static_range(self):
+        sensor.ioctl(sensor.IOCTL_LEPTON_SET_MEASUREMENT_RANGE, self.static_minimum, self.static_maximum)
 
+    def thermal_configure(self, static_range=None):
+        logger.info("##############################################################")
+        logger.info("SETTINGS")
+        if static_range is not None:
+            self.static_range = static_range
+        if self.static_range:
+            sensor.ioctl(sensor.IOCTL_LEPTON_SET_MEASUREMENT_MODE, True)
+            sensor.ioctl(sensor.IOCTL_LEPTON_SET_MEASUREMENT_RANGE, self.static_minimum, self.static_maximum)
+
+        else:
+            sensor.ioctl(sensor.IOCTL_LEPTON_SET_MEASUREMENT_MODE, False)
+            logger.info("Setting: AGC Enable and Disable (Enable)")
+            sensor.ioctl(sensor.IOCTL_LEPTON_SET_ATTRIBUTE, 0x0101, struct.pack("<I", 1))
+
+            logger.info("Setting: RAD Radiometry Control Enable")
+            sensor.ioctl(sensor.IOCTL_LEPTON_SET_ATTRIBUTE, 0x4E11, struct.pack("<I", 1))
+
+        logger.info("-------------------------------------------------------------")
+        logger.info("AGC:")
+        # TODO switch modes
         data = sensor.ioctl(sensor.IOCTL_LEPTON_GET_ATTRIBUTE, 0x0100, 2)
         LEP_AGC_ENABLE_TAG = struct.unpack("<I", data)[0]
         #LEP_AGC_DISABLE=0,
@@ -255,10 +421,45 @@ class Camera():
         #LEP_AGC_DISABLE=0,
         #LEP_AGC_ENABLE
         logger.info("AGC Calculation Enable State", LEP_AGC_ENABLE_TAG)
+
+        self.receive_gain_mode()
+        self.send_gain_mode()
+
+        #typedef struct LEP_SYS_GAIN_MODE_OBJ_T_TAG
+        #{
+        #FLR_SYS_GAIN_MODE_ROI_T sysGainModeROI; /* Specified ROI to use for Gain Mode switching */
+        #FLR_SYS_GAIN_MODE_THRESHOLDS_T sysGainModeThresholds; /* Set of threshold triggers */
+        #FLR_UINT16 sysGainRoiPopulation; /* Population size in pixels within the ROI */
+        #FLR_UINT16 sysGainModeTempEnabled; /* True if T-Linear is implemented */
+        #FLR_UINT16 sysGainModeFluxThresholdLowToHigh; /* calculated from desired temp */
+        #FLR_UINT16 sysGainModeFluxThresholdHighToLow; /* calculated from desired temp */
+        #}LEP_SYS_GAIN_MODE_OBJ_T, *LEP_SYS_GAIN_MODE_OBJ_T_PTR;
+
+        #typedef struct LEP_SYS_GAIN_MODE_ROI_T_TAG
+        #{
+        #LEP_UINT16 startCol;
+        #LEP_UINT16 startRow;
+        #LEP_UINT16 endCol;
+        #LEP_UINT16 endRow;
+        #}LEP_SYS_GAIN_MODE_ROI_T, *LEP_SYS_GAIN_MODE_ROI_T_PTR;
+        #/* Gain Mode Support
+        #*/
+        #typedef struct LEP_SYS_GAIN_MODE_THRESHOLDS_T_TAG
+        #{
+        #LEP_SYS_THRESHOLD_T sys_P_high_to_low; /* Range: [0 - 100], percent */
+        #LEP_SYS_THRESHOLD_T sys_P_low_to_high; /* Range: [0 - 100], percent */
+        #LEP_SYS_THRESHOLD_T sys_C_high_to_low; /* Range: [0 - 600], degrees C */
+        #LEP_SYS_THRESHOLD_T sys_C_low_to_high; /* Range: [0 - 600], degrees C */
+        #LEP_SYS_THRESHOLD_T sys_T_high_to_low; /* Range: [0 - 900], Kelvin */
+        #LEP_SYS_THRESHOLD_T sys_T_low_to_high; /* Range: [0 - 900], Kelvin */
+        #}LEP_SYS_GAIN_MODE_THRESHOLDS_T, *LEP_SYS_GAIN_MODE_THRESHOLDS_T_PTR;
+
+        #0x0250
+
         ###############################################################
         # RADIOMETRY
-
-        sensor.ioctl(sensor.IOCTL_LEPTON_SET_ATTRIBUTE, 0x4E11, struct.pack("<I", 1))
+        logger.info("-------------------------------------------------------------")
+        logger.info("RADIOMETRY:")
 
         self.thermal_fcc()
         sensor.snapshot()
@@ -294,6 +495,12 @@ class Camera():
         #LEP_RAD_ENABLE,
         logger.info("RAD T-Linear Enable State", LEP_RAD_ENABLE_E_TAG)
 
+        data = sensor.ioctl(sensor.IOCTL_LEPTON_GET_ATTRIBUTE, 0x4EC8, 2)
+        LEP_RAD_ENABLE_E_TAG = struct.unpack("<I", data)[0]
+        #LEP_RAD_DISABLE = 0,
+        #LEP_RAD_ENABLE,
+        logger.info("RAD T-Linear Auto Resolution", LEP_RAD_ENABLE_E_TAG)
+
         startRow = 0
         startCol = 0
         endRow = sensor.height() - 1
@@ -309,11 +516,81 @@ class Camera():
 
         data = sensor.ioctl(sensor.IOCTL_LEPTON_GET_ATTRIBUTE, 0x4EC4, 2)
         self.thermal_tlinear_resolution = 0.01 if struct.unpack("<I", data)[0] else 0.1
-        print("thermal_tlinear_resolution", self.thermal_tlinear_resolution)
+        logger.info("thermal_tlinear_resolution", self.thermal_tlinear_resolution)
+
+        self.receive_flux_parameters()
+        self.send_flux_parameters()
+        logger.info("##############################################################")
+
+    def receive_flux_parameters(self):
+        data = sensor.ioctl(sensor.IOCTL_LEPTON_GET_ATTRIBUTE, 0x4EBC, 8)
+        self.sceneEmissivity, self.TBkgK, self.tauWindow, self.TWindowK, self.tauAtm, self.TAtmK, self.reflWindow, self.TReflK = struct.unpack("<HHHHHHHH", data)
+        logger.info(
+            "RAD Flux Linear Parameters:",
+            "\nsceneEmissivity", self.sceneEmissivity,
+            "\nTBkgK", self.TBkgK,
+            "\ntauWindow", self.tauWindow,
+            "\nTWindowK", self.TWindowK,
+            "\ntauAtm", self.tauAtm,
+            "\nTAtmK", self.TAtmK,
+            "\nreflWindow", self.reflWindow,
+            "\nTReflK", self.TReflK,
+        )
+
+    def send_flux_parameters(self):
+        data = struct.pack("<HHHHHHHH", self.sceneEmissivity, self.TBkgK, self.tauWindow, self.TWindowK, self.tauAtm, self.TAtmK, self.reflWindow, self.TReflK)
+        sensor.ioctl(sensor.IOCTL_LEPTON_SET_ATTRIBUTE, 0x4EBD, data)
+        self.receive_flux_parameters()
+
+    @property
+    def emissivity(self):
+        return (self.sceneEmissivity*100.0)/8192
+
+    @emissivity.setter
+    def emissivity(self, value):
+        value = min(100, max(1, value))
+        self.sceneEmissivity = min(8192, max(0, round(value/100.0 * 8192)))
+        self.send_flux_parameters()
+
+    def string_gain_mode(self):
+        if self.gain_mode == 0:
+            return "HIGH"
+        elif self.gain_mode == 1:
+            return "LOW"
+        elif self.gain_mode == 2:
+            return "AUTO"
+
+    def next_gain_mode(self):
+        self.gain_mode += 1
+        if self.gain_mode > 2:
+            self.gain_mode = 0
+
+    def send_gain_mode(self):
+        data = struct.pack("<I", self.gain_mode)
+        sensor.ioctl(sensor.IOCTL_LEPTON_SET_ATTRIBUTE, 0x0249, data)
+        logger.info("Setting: SYS Gain Mode to ", self.gain_mode)
+        self.receive_gain_mode()
+
+    def receive_gain_mode(self):
+        # TODO switch modes
+        data = sensor.ioctl(sensor.IOCTL_LEPTON_GET_ATTRIBUTE, 0x0248, 2)
+        self.gain_mode = struct.unpack("<I", data)[0]
+        #LEP_SYS_GAIN_MODE_HIGH = 0,
+        #LEP_SYS_GAIN_MODE_LOW,
+        #LEP_SYS_GAIN_MODE_AUTO,
+        logger.info("SYS Gain Mode", self.gain_mode)
 
     def tlinear2celcius(self, tlinear):
         """ tlinear_to_celcius """
         return (tlinear * self.thermal_tlinear_resolution) - 273.15
+
+    def get_spotmeter_values(self):
+        data = sensor.ioctl(sensor.IOCTL_LEPTON_GET_ATTRIBUTE, 0x4ED0, 4)
+        radSpotmeterValue, radSpotmeterMaxValue, radSpotmeterMinValue, radSpotmeterPopulation = struct.unpack("<HHHH", data)
+
+        self.temperature_mean = self.tlinear2celcius(radSpotmeterValue)
+        self.temperature_max = self.tlinear2celcius(radSpotmeterMaxValue)
+        self.temperature_min = self.tlinear2celcius(radSpotmeterMinValue)
 
     def get_thermal_statistics(self):
         if not self.thermal:
@@ -323,12 +600,6 @@ class Camera():
         fpa_temp = sensor.ioctl(sensor.IOCTL_LEPTON_GET_FPA_TEMPERATURE)
         aux_temp = sensor.ioctl(sensor.IOCTL_LEPTON_GET_AUX_TEMPERATURE)
 
-        data = sensor.ioctl(sensor.IOCTL_LEPTON_GET_ATTRIBUTE, 0x4ED0, 4)
-        radSpotmeterValue, radSpotmeterMaxValue, radSpotmeterMinValue, radSpotmeterPopulation = struct.unpack("<HHHH", data)
-
-        self.temperature_mean = self.tlinear2celcius(radSpotmeterValue)
-        self.temperature_max = self.tlinear2celcius(radSpotmeterMaxValue)
-        self.temperature_min = self.tlinear2celcius(radSpotmeterMinValue)
         string += "FPA {:.2f} AUX {:.2f}".format(fpa_temp, aux_temp)
         string += "\n {:.2f} {:.2f} {:.2f}".format(self.temperature_mean, self.temperature_max, self.temperature_min)
 
@@ -341,12 +612,10 @@ class Camera():
             #self.x, self.y,
             #self.button_shutter, self.button_top, self.button_middle, self.button_bottom,
         #)
-        string += "{} mV\n".format(self.battery_millivolts)
+        string += "{} mV {}\n".format(self.battery_millivolts, time_datetime2string())
         string += self.get_thermal_statistics()
         self.generated_text = string
         return string
-
-
 
 def save_camera_settings(settings, camera):
     if "camera" not in settings.dict:
@@ -354,16 +623,25 @@ def save_camera_settings(settings, camera):
     camera_settings = settings.dict["camera"]
 
     camera_settings["always_pixel_pointer"] = camera.always_pixel_pointer
+    camera_settings["preview"] = camera.preview
+    camera_settings["static_range"] = camera.static_range
+    camera_settings["static_minimum"] = camera.static_minimum
+    camera_settings["static_maximum"] = camera.static_maximum
+
     settings.write()
     print("Camera settings saved")
 
 def load_camera_settings(settings, camera):
-    settings.read()
     if "camera" not in settings.dict:
         return
     camera_settings = settings.dict["camera"]
 
     camera.always_pixel_pointer = camera_settings["always_pixel_pointer"]
+    camera.preview = camera_settings.get("preview", CameraPreview.THERMAL)
+    camera.static_range = camera_settings.get("static_range", False)
+    camera.static_minimum = camera_settings.get("static_minimum", 10.0)
+    camera.static_maximum = camera_settings.get("static_maximum", 35.0)
+
     print("Camera settings loaded")
 
 
@@ -383,7 +661,6 @@ def save_camera_slave_calibration_settings(settings, camera_slave):
     print("Camera slave settings saved")
 
 def load_camera_slave_calibration_settings(settings, camera_slave):
-    settings.read()
     if "camera_slave" not in settings.dict:
         return
     camera_slave_settings = settings.dict["camera_slave"]
@@ -409,7 +686,6 @@ def save_touch_calibration_settings(settings, touch):
     print("Touch screen settings saved")
 
 def load_touch_calibration_settings(settings, touch):
-    settings.read()
     if "touch" not in settings.dict:
         return
     touch_settings = settings.dict["touch"]
@@ -420,7 +696,28 @@ def load_touch_calibration_settings(settings, touch):
     touch.y_factor = touch_settings["y_factor"]
     print("Touch screen settings loaded")
 
-def load_menu(menu, settings, touch, camera, camera_slave, screen, **kwargs):
+def sync_time(camera, screen, time_settings, aux_camera):
+
+    absolute_seconds = aux_camera.time()
+    time_dictionary2rtc(time_settings.dict)
+    reference_seconds = time_settings.dict.get("reference_seconds", 581.4265)
+    calibration_factor = time_settings.dict.get("calibration_factor", 1.0)
+    if absolute_seconds < reference_seconds:
+        logger.info("Battery was unplugged")
+        time_settings.dict["reference_seconds"] = absolute_seconds
+        reference_seconds = 0
+        time_settings.write()
+        uos.sync()
+        camera.screen_buff.draw_rectangle(0, 0, camera.width, camera.height, color=(30,30,30), fill=True)
+        camera.screen_buff.draw_string(10,0, "TIME WAS LOST", color=(255,0,0), scale=2.0, mono_space=False)
+        screen.write_to_screen(camera.screen_buff)
+        utime.sleep_ms(2000)
+
+    forward_seconds = max(0, absolute_seconds - reference_seconds) * calibration_factor
+    time_modify_rtc(modify_amount=forward_seconds, modify_unit="second")
+    logger.info("Local time set to:", time_datetime2string())
+
+def load_menu(time_settings, settings, menu, touch, camera, camera_slave, screen, aux_camera, **kwargs):
 
     def unused():
         return "empty"
@@ -445,6 +742,65 @@ def load_menu(menu, settings, touch, camera, camera_slave, screen, **kwargs):
     # up
     # enter
     # down
+    def get_time_calibration_factor():
+        return time_settings.dict.get("calibration_factor", 1.0)
+
+    def time_save():
+        time_rtc2dictionary(time_settings.dict)
+        time_settings.dict["reference_seconds"] = aux_camera.time()
+        time_settings.write()
+        uos.sync()
+        logger.info("Time saved")
+        sync_time(camera, screen, time_settings, aux_camera)
+
+    def time_settings_write():
+        time_settings.write()
+
+    def entity_to_modify_time(unit):
+        return Menu.Entity(text=unit, action={
+            "title": time_datetime2string,
+            "shutter":  back_no_text,
+            "top": Menu.Entity(text="Up", action=(time_modify_rtc, {"modify_amount":1, "modify_unit": unit})),
+            "middle": Menu.Entity(text="Finish adjusting %s" % unit, action=menu.back),
+            "bottom": Menu.Entity(text="Down", action=(time_modify_rtc, {"modify_amount":-1, "modify_unit": unit})),
+        })
+
+
+    def get_forward_seconds():
+        aux_camera.sync()
+        absolute_seconds = aux_camera.time()
+        reference_seconds = time_settings.dict.get("reference_seconds", 581.4265)
+        return (absolute_seconds - reference_seconds) * get_time_calibration_factor()
+
+
+    def change_time_calibration_factor(modify_amount = 0.0001):
+        time_settings.dict["calibration_factor"] = get_time_calibration_factor() + modify_amount
+        sync_time(camera, screen, time_settings, aux_camera)
+
+    menu_time_change = {
+        "title": time_datetime2string,
+        "shutter": back_no_text,
+        "top": scroll_up,
+        "bottom": scroll_down,
+        "middle": scroll_selection,
+        "items": [
+            entity_to_modify_time("year"),
+            entity_to_modify_time("month"),
+            entity_to_modify_time("day"),
+            entity_to_modify_time("hour"),
+            entity_to_modify_time("minute"),
+            entity_to_modify_time("second"),
+            Menu.Entity(text="Save date/time change", action=[time_save, menu.back]),
+            Menu.Entity(text="Calibration", action={
+                "title": (lambda: "Date {}\nSeconds: {}".format(time_datetime2string(), get_forward_seconds())) ,
+                "shutter":  back_no_text,
+                "top": Menu.Entity(text="Up", action=(change_time_calibration_factor, {"modify_amount":0.00002})),
+                "middle": Menu.Entity(text=(lambda: "Finish adjusting factor {}".format(get_time_calibration_factor())), action=[menu.back, time_settings_write]),
+                "bottom": Menu.Entity(text="Down", action=(change_time_calibration_factor, {"modify_amount":-0.00002})),
+            }),
+        ]
+    }
+
     def column_factor():
         if camera_slave.control.column_zoom_denominator == 0:
             return 999
@@ -559,11 +915,20 @@ def load_menu(menu, settings, touch, camera, camera_slave, screen, **kwargs):
         "top" : Menu.Entity(text=None, action=camera.decrease_playback_index),
         "middle": Menu.Entity(text=None, action={
             "title": "OPTIONS",
+            "page": "MENU",
             "shutter": back_no_text,
             "top": scroll_up,
             "bottom": scroll_down,
             "middle": scroll_selection,
             "items": [
+                Menu.Entity(text="Analysis", action={
+                    "page": "ANALYSIS",
+                    "title": (lambda: "{} [{}]".format(camera.playback_img_name, camera.playback_index)),
+                    "shutter": back_no_text,
+                    "top": back_no_text,
+                    "middle": back_no_text,
+                    "bottom": back_no_text,
+                }),
                 back_action,
                 Menu.Entity(text="Delete", action=[camera.delete_playback_img_name, menu.back]),
                 Menu.Entity(text="As Startup", action=[save_fb_as_startup, menu.back]),
@@ -571,6 +936,114 @@ def load_menu(menu, settings, touch, camera, camera_slave, screen, **kwargs):
         }),
         "bottom" : Menu.Entity(text=None, action=camera.increase_playback_index),
     }
+
+    def emissivity_text():
+        return "Emissivity. {:.1f}".format(camera.emissivity)
+
+    def emissivity_down():
+        camera.emissivity -= 1.0
+
+    def emissivity_up():
+        camera.emissivity += 1.0
+
+    def toggle_static_range():
+        camera.static_range = not camera.static_range
+        camera.thermal_configure()
+
+    def string_static_range_minimum():
+        return "Static min Temp: {:.1f}".format(camera.static_minimum)
+
+    def static_range_minimum_down():
+        camera.static_minimum -= 1.0
+        camera.send_thermal_static_range()
+
+    def static_range_minimum_up():
+        camera.static_minimum += 1.0
+        camera.send_thermal_static_range()
+
+    def string_static_range_maximum():
+        return "Static max Temp: {:.1f}".format(camera.static_maximum)
+
+    def static_range_maximum_down():
+        camera.static_maximum -= 1.0
+        camera.send_thermal_static_range()
+
+    def static_range_maximum_up():
+        camera.static_maximum += 1.0
+        camera.send_thermal_static_range()
+
+
+
+    menu_thermal_options = {
+        "title": "THERMAL OPTIONS",
+        "shutter": back_no_text,
+        "top": scroll_up,
+        "bottom": scroll_down,
+        "middle": scroll_selection,
+        "items": [
+            Menu.Entity(text=(lambda: "Flat Field Corr. {}".format(camera.get_thermal_statistics())), action=camera.thermal_fcc),
+            Menu.Entity(text=emissivity_text, action=
+            {
+                "title": emissivity_text,
+                "shutter":  back_no_text,
+                "top": Menu.Entity(text="Up", action=emissivity_up),
+                "middle": back_action,
+                "bottom": Menu.Entity(text="Down", action=emissivity_down),
+            }),
+            Menu.Entity(text=(lambda: "Gain: {}".format(camera.string_gain_mode())), action=camera.next_gain_mode),
+            Menu.Entity(text=(lambda: "Static range: {}".format(camera.static_range)), action=toggle_static_range),
+            Menu.Entity(text=string_static_range_maximum, action=
+            {
+                "title": string_static_range_maximum,
+                "shutter":  back_no_text,
+                "top": Menu.Entity(text="Up", action=static_range_maximum_up),
+                "middle": back_action,
+                "bottom": Menu.Entity(text="Down", action=static_range_maximum_down),
+            }),
+            Menu.Entity(text=string_static_range_minimum, action=
+            {
+                "title": string_static_range_minimum,
+                "shutter":  back_no_text,
+                "top": Menu.Entity(text="Up", action=static_range_minimum_up),
+                "middle": back_action,
+                "bottom": Menu.Entity(text="Down", action=static_range_minimum_down),
+            }),
+            Menu.Entity(text="Save", action=[
+                (save_camera_settings, {"settings": settings, "camera":camera}),
+                menu.back,
+            ]),
+            Menu.Entity(text="Restart", action=[sensor_setup, camera.thermal_configure]),
+        ],
+    }
+
+    def restore_backup():
+        settings.read(from_backup=True)
+        settings.write()
+
+        load_camera_slave_calibration_settings(settings=settings, camera_slave=camera_slave)
+        load_touch_calibration_settings(settings=settings, touch=touch)
+        load_camera_settings(settings=settings, camera=camera)
+
+    def save_backup():
+        save_camera_slave_calibration_settings(settings=settings, camera_slave=camera_slave)
+        save_touch_calibration_settings(settings=settings, touch=touch)
+        save_camera_settings(settings=settings, camera=camera)
+
+        settings.write()  # First make sure the current settings were saved
+        settings.write(to_backup=True)
+
+    menu_manage_settings = {
+        "title": "MANAGE SETTINGS",
+        "shutter": back_no_text,
+        "top": scroll_up,
+        "bottom": scroll_down,
+        "middle": scroll_selection,
+        "items": [
+            Menu.Entity(text="Restore Backup", action=[restore_backup, menu.back]),
+            Menu.Entity(text="Save Backup", action=[save_backup, menu.back]),
+        ],
+    }
+
     def toggle_pixle_pointer():
         camera.always_pixel_pointer = not camera.always_pixel_pointer
         save_camera_settings(settings=settings, camera=camera)
@@ -582,29 +1055,36 @@ def load_menu(menu, settings, touch, camera, camera_slave, screen, **kwargs):
         "bottom": scroll_down,
         "middle": scroll_selection,
         "items": [
-            Menu.Entity(text=(lambda: "Flat Field Corr. {}".format(camera.get_thermal_statistics())), action=camera.thermal_fcc),
+            Menu.Entity(text="Thermal options", action=menu_thermal_options),
             Menu.Entity(text=(lambda: "Always pointer: {}".format(camera.always_pixel_pointer)), action=toggle_pixle_pointer),
             Menu.Entity(text="Calibrate Field Of View", action=menu_camera_slave_calibration),
             Menu.Entity(text="Calibrate Touch", action=menu_touch_calibration),
+            Menu.Entity(text="Manage settings", action=menu_manage_settings),
+            Menu.Entity(text="Set Time", action=menu_time_change),
             Menu.Entity(text=(lambda: "1 FPS {}".format(camera.fps)), action=camera.fps_reset),
         ],
     }
 
     def save_img():
+        print("Snapshot...")
         camera.to_save_img = True
+
+    def next_preview():
+        camera.next_preview()
+        save_camera_settings(settings=settings, camera=camera)
 
     menu.structure = {
         "state": CameraState.PREVIEW,
         "page": "ROOT",
         "title": "", # (lambda: "{}".format(camera.last_img_number)),
         "shutter": Menu.Entity(text=None, action=save_img),
-        "top" : Menu.Entity(text=None, action=camera.next_preview),
+        "top" : Menu.Entity(text=None, action=next_preview),
         "middle": Menu.Entity(text=None, action={
             "state": CameraState.PREVIEW,
             "page": "INFO",
             "title": camera.preview_info,
             "shutter": Menu.Entity(text=None, action=save_img),
-            "top" : Menu.Entity(text="Views", action=camera.next_preview),
+            "top" : Menu.Entity(text="Views", action=next_preview),
             "middle": Menu.Entity(text="Menu", action=menu_main),
             "bottom" :  Menu.Entity(text="Hide / Playback", action=menu.back),
             "postview": Menu.Entity(text=None, action={"state": CameraState.POSTVIEW, "title": "SNAPSHOT"}),
@@ -615,8 +1095,6 @@ def load_menu(menu, settings, touch, camera, camera_slave, screen, **kwargs):
 
     menu.entity_order = ["top", "middle", "bottom"]
 
-    # TODO check print thermal, and set regoin of interest spotmeter. Make default display info
-    menu.process_action("middle")
     logger.info("Menu initialized")
 
 class CameraSlave():
@@ -686,96 +1164,12 @@ class CameraSlave():
         self.control.row_zoom_numerator -= 1
         self.control.row_zoom_denominator = 20
 
-class ImageBuffer():
-    """ There seems to be some bug which causes alloc_extra_fb to overwrite the previous object memory
-    pointer
-    This causes all frame buffers to write only in the piece of memory of the last one """
-    pass
 
-def testing_bug(screen, **kwargs):
-
-    # TODO remove
-    logger.info("Test")
-    new_alloc = None
-    while True:
-        old_alloc = new_alloc
-        new_alloc = sensor.alloc_extra_fb(320, 240, sensor.RGB565)
-        print(addressof(new_alloc), addressof(new_alloc.bytearray()))
-        new_alloc.draw_rectangle(0,0, 100, 100, color=(0,0,255), fill=True)
-        if old_alloc:
-            print("Change old")
-            print(addressof(old_alloc), addressof(old_alloc.bytearray()))
-            old_alloc.draw_rectangle(0,0, 100, 100, color=(0,255,0), fill=True)
-            print("done")
-            print("old in red")
-            screen.write_to_screen(old_alloc)
-        utime.sleep_ms(1000)
-        print("new in blue")
-        screen.write_to_screen(new_alloc)
-        utime.sleep_ms(1000)
-
-
-def testing_bug2(screen, **kwargs):
-
-    logger.info("Test")
-    new_alloc = None
-    old_alloc = sensor.alloc_extra_fb(320, 240, sensor.RGB565)
-    new_alloc = sensor.alloc_extra_fb(320, 240, sensor.RGB565)
-    print(addressof(old_alloc), addressof(old_alloc.bytearray()))
-    old_alloc.draw_rectangle(0,0, 100, 100, color=(0,255,255), fill=True)
-    print(addressof(new_alloc), addressof(new_alloc.bytearray()))
-    new_alloc.draw_rectangle(0,0, 100, 100, color=(0,0,255), fill=True)
-    while True:
-        print("old")
-        screen.write_to_screen(old_alloc)
-        utime.sleep_ms(1000)
-        print("new in blue")
-        screen.write_to_screen(new_alloc)
-        utime.sleep_ms(1000)
-        old_alloc.draw_rectangle(0,0, 100, 100, color=(255,0,0), fill=True)
-
-
-def testing_bug3(screen, camera, camera_slave, **kwargs):
-
-    logger.info("Test")
-    print(addressof(camera.screen_buff), addressof(camera.screen_buff.bytearray()))
-    camera.screen_buff.draw_rectangle(0,0, 100, 100, color=(0,255,255), fill=True)
-    print(addressof(camera_slave.rx_buff), addressof(camera_slave.rx_buff.bytearray()))
-    camera_slave.rx_buff.draw_rectangle(0,0, 100, 100, color=(0,0,255), fill=True)
-    while True:
-        print("old")
-        screen.write_to_screen(camera.screen_buff)
-        utime.sleep_ms(1000)
-        print("new in blue")
-        screen.write_to_screen(camera_slave.rx_buff)
-        utime.sleep_ms(1000)
-        camera.screen_buff.draw_rectangle(0,0, 100, 100, color=(255,0,0), fill=True)
-
-def testing_workaround(screen, **kwargs):
-
-    # TODO remove
-    logger.info("Test")
-    new_alloc = None
-    while True:
-        old_alloc = new_alloc
-        new_alloc = sensor.alloc_extra_fb(320, 240, sensor.RGB565)
-        print(addressof(new_alloc), addressof(new_alloc.bytearray()))
-        new_alloc.draw_rectangle(0,0, 100, 100, color=(0,0,255), fill=True)
-        if old_alloc:
-            print("Change old")
-            print(addressof(old_alloc), addressof(old_alloc.bytearray()))
-            old_alloc.draw_rectangle(0,0, 100, 100, color=(0,255,0), fill=True)
-            print("done")
-            print("old in red")
-            screen.write_to_screen(bytearray_at(addressof(old_alloc), 320 * 240 * 2))
-        utime.sleep_ms(1000)
-        print("new in blue")
-        screen.write_to_screen(bytearray_at(addressof(new_alloc), 320 * 240 * 2))
-        utime.sleep_ms(1000)
 
 
 def main():
 
+    utime.sleep_ms(1000)
     ##############################################################################
     # CREATE COMPONENTS
     logger.info("uname", uos.uname())
@@ -809,9 +1203,11 @@ def main():
 
     screen = TFT(
         spi=DynamicSPI(
-            baudrate=54000000, pin_cs=Pin.board.P3, polarity=0, phase=0
+            baudrate=54000000, pin_cs=Pin.board.P3, polarity=0, phase=0,
         ),
-        pin_dc=Pin.board.P9
+        pin_dc=Pin.board.P9,
+        framebuffer_swap_endianness=True,
+        fast_byteswap=False,
     )
 
     menu = Menu()
@@ -847,9 +1243,18 @@ def main():
     screen.initialize()
     screen.set_window(0,0,camera.width,camera.height)
 
+    camera.screen_buff.draw_rectangle(0, 0, camera.width, camera.height, color=(30,30,30), fill=True)
+    screen.write_to_screen(camera.screen_buff)
+    utime.sleep_ms(100)
+    display_intro = False
     try:
         image.Image(camera.startup_img_name, copy_to_fb=camera.screen_buff)
+        display_intro = True
+    except Exception as e:
+        logger.info("Could not display startup image {}".format(e))
 
+    if display_intro:
+        logger.info("Displaying intro")
         camera.screen_buff.draw_rectangle(0, 0, camera.width, 20, color=(30,30,30), fill=True)
         camera.screen_buff.draw_string(10,0, """Shutter Button is "Back" button""", color=(0,200,30), scale=2.0, mono_space=False)
 
@@ -860,56 +1265,23 @@ def main():
         camera.screen_buff.draw_string(round(camera.width/11), round(camera.height*3.6/4), "LOADING... WAIT", color=(200,0,0), scale=2.0, mono_space=False)
 
         screen.write_to_screen(camera.screen_buff)
-    except Exception as e:
-        logger.info("Could not display startup image {}".format(e))
-
-    logger.info("Initializing camera...")
-    def setup_visual_camera():
-        sensor.reset()
-        sensor.set_pixformat(sensor.RGB565)
-        sensor.set_framesize(sensor.QVGA)
-        sensor.skip_frames(n=1)
-
-    def setup_thermal_camera():
-        import struct
-        #min_temp_in_celsius = 15.0
-        #max_temp_in_celsius = 40.0
-
-        print("Resetting Lepton...")
-        # These settings are applied on reset
-        try:
-            sensor.reset()
-        except Exception as e:
-            logger.info("{}".format(e))
-            raise
-        sensor.ioctl(sensor.IOCTL_LEPTON_SET_MEASUREMENT_MODE, False)
-        #sensor.ioctl(sensor.IOCTL_LEPTON_SET_MEASUREMENT_MODE, True)
-        #sensor.ioctl(sensor.IOCTL_LEPTON_SET_MEASUREMENT_RANGE, min_temp_in_celsius, max_temp_in_celsius)
-        print("Lepton Res (%dx%d)" % (sensor.ioctl(sensor.IOCTL_LEPTON_GET_WIDTH),
-                                      sensor.ioctl(sensor.IOCTL_LEPTON_GET_HEIGHT)))
-        print("Radiometry Available: " + ("Yes" if sensor.ioctl(sensor.IOCTL_LEPTON_GET_RADIOMETRY) else "No"))
-
-        sensor.set_pixformat(sensor.GRAYSCALE)
-        sensor.set_framesize(sensor.QQVGA)
-        sensor.skip_frames(time=5000)
-
-        camera.prepare_thermal_statistics()
-
-    if camera.thermal:
-        setup_thermal_camera()
-    else:
-        setup_visual_camera()
 
     logger.info("Initializing auxiliar processor...")
-    aux_camera.initialize()
+    if aux_camera.initialize(timeout_ms=5000):
+        logger.info("Initializtion complete. Last package number: ", aux_camera.number_package_received())
+    else:
+        camera.screen_buff.draw_rectangle(0, 0, camera.width, camera.height, color=(30,30,30), fill=True)
+        camera.screen_buff.draw_string(10,0, "Aux processor error", color=(255,0,0), scale=2.0, mono_space=False)
+        screen.write_to_screen(camera.screen_buff)
+        utime.sleep_ms(10000)
+    camera.battery_millivolts = aux_camera.battery_millivolts
+    absolute_seconds = aux_camera.time()
+    logger.info("Battery:", camera.battery_millivolts, "mV", " Absolute seconds:", absolute_seconds)
 
-    logger.info("Initializing camera slave...")
-    camera_slave.sync(ignore_busy=True)
 
-    logger.info("Enabling input interrupts...")
-    input_handler.enable(
-        callback=input_interrupt, **components
-    )
+    logger.info("Initializing time...")
+    time_settings = Settings("time.json")
+    sync_time(camera, screen, time_settings, aux_camera)
 
     logger.info("Loading settings...")
 
@@ -917,8 +1289,19 @@ def main():
     load_touch_calibration_settings(settings=settings, touch=touch)
     load_camera_settings(settings=settings, camera=camera)
 
+    logger.info("Initializing thermal camera...")
+
+    sensor_setup()
+    camera.thermal_configure()
+
+    logger.info("Enabling input interrupts...")
+    input_handler.enable(
+        callback=input_interrupt, **components
+    )
+
     logger.info("Loading menu...")
-    load_menu(**components)
+    load_menu(time_settings=time_settings, **components)
+
 
     logger.info("Running main loop...")
     loop(**components)
@@ -991,6 +1374,7 @@ def loop(camera, screen, menu, input_handler, camera_slave, **kwargs):
     screen_refresh_needed = True
     state_ticks_ms = utime.ticks_ms()
 
+    menu.process_action("middle")
     while True:
         changed_state = state is not menu.state
         state = menu.state
@@ -1013,14 +1397,6 @@ def loop(camera, screen, menu, input_handler, camera_slave, **kwargs):
         if changed_preview:
             camera.fps_reset()
             logger.info("Processing preview change to ", camera.preview)
-            #if camera.preview is CameraPreview.THERMAL:
-                #camera.set_low_resolution()
-                #logger.info("Set low res")
-            #if camera.preview is CameraPreview.VISIBLE:
-                #camera.set_normal_resolution()
-                #logger.info("Set normal res")
-            #if camera.preview is CameraPreview.MIX:
-                #camera.set_normal_resolution()
 
         # -----------------------------------------------------------------------------------------
         # RUN TIME
@@ -1030,7 +1406,9 @@ def loop(camera, screen, menu, input_handler, camera_slave, **kwargs):
             screen_refresh_needed = True
             text = "\n" + menu.generate_text()
 
-            if camera.preview is CameraPreview.THERMAL or camera.preview is CameraPreview.THERMAL_ANALYSIS or camera.preview is CameraPreview.MIX:
+            if camera_preview is CameraPreview.THERMAL or camera_preview is CameraPreview.THERMAL_ANALYSIS or camera_preview is CameraPreview.THERMAL_GREY or camera_preview is CameraPreview.MIX:
+
+                camera.get_spotmeter_values()
                 def map_g_to_temp(g):
                     return ((g * (camera.temperature_max - camera.temperature_min)) / 255.0) + camera.temperature_min
 
@@ -1038,11 +1416,12 @@ def loop(camera, screen, menu, input_handler, camera_slave, **kwargs):
                 img_touch_x = max(0,min(sensor.width() - 1, round(camera.x * sensor.width()/camera.width) ))
                 img_touch_y = max(0,min(sensor.height() - 1, round(camera.y * sensor.height()/camera.height) ))
                 pixel = "{:.2f}".format(map_g_to_temp(img.get_pixel(img_touch_x, img_touch_y)))
-                if not camera.thermal:
-                    pass
-                elif camera.preview is CameraPreview.THERMAL or camera.preview is CameraPreview.MIX:
+
+                if camera_preview is CameraPreview.THERMAL_GREY:
+                    img.to_rgb565()
+                elif camera_preview is CameraPreview.THERMAL or camera_preview is CameraPreview.MIX:
                     img.to_rainbow(color_palette=sensor.PALETTE_IRONBOW) # color it
-                elif camera.preview is CameraPreview.THERMAL_ANALYSIS:
+                elif camera_preview is CameraPreview.THERMAL_ANALYSIS:
 
                     # Color Tracking Thresholds (Grayscale Min, Grayscale Max)
                     threshold_list = [(200, 255)]
@@ -1064,9 +1443,8 @@ def loop(camera, screen, menu, input_handler, camera_slave, **kwargs):
 
                 qqvga2qvga(sensor.get_fb(), camera.screen_buff)
 
-            if camera.preview is CameraPreview.VISIBLE or camera.preview is CameraPreview.MIX:
+            if camera_preview is CameraPreview.VISIBLE or camera_preview is CameraPreview.MIX:
                 input_handler.disable()
-                sync_success = True
                 sync_success = camera_slave.sync()
                 input_handler.enable()
                 if not sync_success:
@@ -1074,10 +1452,10 @@ def loop(camera, screen, menu, input_handler, camera_slave, **kwargs):
                     camera.screen_buff.fill(c=(10,10,10))
                     camera.screen_buff.draw_string(camera.width//2, camera.height//2, "ERROR", c=(255,0,0))
 
-                if camera.preview is CameraPreview.VISIBLE:
+                if camera_preview is CameraPreview.VISIBLE:
                     qvga2qvga(camera_slave.rx_buff, camera.screen_buff, 0, 1)
                     pixel = camera.screen_buff.get_pixel(camera.x, camera.y)
-                elif camera.preview is CameraPreview.MIX:
+                elif camera_preview is CameraPreview.MIX:
                     qvga2qvga(camera_slave.rx_buff, camera.screen_buff, 0, 2)
 
             if menu.page != "ROOT" or camera.always_pixel_pointer:
@@ -1087,53 +1465,83 @@ def loop(camera, screen, menu, input_handler, camera_slave, **kwargs):
                     camera.screen_buff.draw_string(camera.x - 20, camera.y + text_y_offset, "{}".format(pixel))
 
         if state is CameraState.PLAYBACK or state is CameraState.POSTVIEW:
+            screen_refresh_needed = False
 
-            if camera.playback_img_name != camera_playback_img_name:
-                camera_playback_img_name = camera.playback_img_name
-                logger.info("Displaying image...", camera.playback_img_name)
-                while True:
-                    try:
-                        image.Image(camera.playback_img_name, copy_to_fb=True)
-                        break
-                    except OSError as e:
-                        logger.info("Error while loading ", camera.playback_img_name, ". Try Again. Error", e)
-                        pass
+            if menu.page == "ANALYSIS":
                 screen_refresh_needed = True
+
+            text = menu.generate_text()
+            if  previous_text != text:
+                screen_refresh_needed = True
+
             if not camera.playback_img_name:
                 logger.info("No image to be loaded")
                 menu.back()
                 continue
+            elif camera.playback_img_name != camera_playback_img_name or screen_refresh_needed:
+                camera_playback_img_name = camera.playback_img_name
+                logger.info("Displaying image...", camera.playback_img_name, " and text ", text)
+                try:
+                    img = image.Image(camera.playback_img_name, copy_to_fb=True)
+                    qvga2qvga(sensor.get_fb(), camera.screen_buff, 0, 1)
+                    img.to_grayscale()
+                    try:
+                        file_name = camera.playback_img_name.split("/")[-1].split(".")[0]
+                        file_name = file_name.split("_")
+                        camera.temperature_min = float(file_name[1]) / 100
+                        camera.temperature_max = float(file_name[2]) / 100
+                    except Exception as e:
+                        print("Could not get min and max from name", e)
+                    print("file_name", file_name, camera.temperature_min, camera.temperature_max)
+                except OSError as e:
+                    camera.screen_buff.draw_rectangle(0, 0, camera.width, camera.height, color=(30,30,30), fill=True)
+                    camera.screen_buff.draw_string(round(camera.width/6), round(camera.height/2.3), "ERROR LOADING...", color=(255,0,0), scale=2.0)
+                    logger.info("Error while loading ", camera.playback_img_name, ". Try Again. Error", e)
 
-            qvga2qvga(sensor.get_fb(), camera.screen_buff, 0, 1)
 
-            text = menu.generate_text()
-            if previous_text != text:
-                logger.info("will need refresh. Before", previous_text, " After ", text)
+                if menu.page == "ANALYSIS":
+
+                    def map_g_to_temp(g):
+                        return ((g * (camera.temperature_max - camera.temperature_min)) / 255.0) + camera.temperature_min
+
+                    img_touch_x = max(0,min(sensor.width() - 1, round(camera.x * sensor.width()/camera.width) ))
+                    img_touch_y = max(0,min(sensor.height() - 1, round(camera.y * sensor.height()/camera.height) ))
+                    pixel = "{:.2f}".format(map_g_to_temp(img.get_pixel(img_touch_x, img_touch_y)))
+
+                    camera.screen_buff.draw_rectangle(camera.x-5, camera.y-5, 10, 10, color=(255,0,255), thickness=1, fill=True)
+                    text_y_offset = 50 if camera.y < camera.height//2 else -50
+                    camera.screen_buff.draw_string(camera.x - 20, camera.y + text_y_offset, "{}".format(pixel))
+
                 screen_refresh_needed = True
+
 
             if state is CameraState.POSTVIEW and utime.ticks_diff(utime.ticks_ms(), state_ticks_ms) > 2000:
                 menu.back()
-
-
-        if menu.state is CameraState.PLAYBACK and menu.page != "PHOTO_VIEW":
-            camera.screen_buff.draw_rectangle(0,0,camera.width//2,camera.height,color=(0,0,0), fill=True)
-
-        if screen_refresh_needed:
-            previous_text = text
-            camera.screen_buff.draw_string(10, 10, text, color=127, scale=2.1, mono_space=False)
-            if state is CameraState.PLAYBACK:
-                logger.info("Refresh needed")
-            screen.write_to_screen(camera.screen_buff)
-            screen_refresh_needed = False
 
         ########################################################################
         # INPUT TASKS which are BIG
         if camera.to_save_img:
             camera.save_img()
             menu.process_action("postview")
+            led_green.on()
+            utime.sleep_ms(100)
+            led_green.off()
 
         if camera.to_save_fb_as_startup:
             camera.save_fb_as_startup()
+
+        ########################################################################
+        # DISPLAY IN SCREEN
+        if menu.state is CameraState.PLAYBACK and menu.page == "MENU":
+            camera.screen_buff.draw_rectangle(0,0,camera.width//2,camera.height,color=(0,0,0), fill=True)
+
+        if screen_refresh_needed:
+            previous_text = text
+            camera.screen_buff.draw_string(10, 10, text, color=(57, 255, 20), scale=2.1, mono_space=False)
+            if state is CameraState.PLAYBACK:
+                logger.info("Refresh needed")
+            screen.write_to_screen(camera.screen_buff)
+            screen_refresh_needed = False
 
         ########################################################################
         # OTHER FUNCTIONALITY

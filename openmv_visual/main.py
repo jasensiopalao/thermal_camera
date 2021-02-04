@@ -27,36 +27,7 @@
 # OpenMV Cam Serial Clock        (P2)
 # OpenMV Cam Slave Select        (P3)
 
-from camera_slave_control import CameraSlaveControl
-import pyb, gc
-from pyb import Pin
-# ustruct, time
-
-import sensor, image, utime, time
-
-sensor.reset()                      # Reset and initialize the sensor.
-sensor.set_pixformat(sensor.RGB565) # Set pixel format to RGB565 (or GRAYSCALE)
-sensor.set_framesize(sensor.QVGA)   # Set frame size to QVGA (320x240)
-sensor.skip_frames(time = 2000)     # Wait for settings take effect.
-clock = time.clock()                # Create a clock object to track the FPS.
-
-red_led = pyb.LED(1)
-red_led.off()
-green_led = pyb.LED(2)
-green_led.off()
-blue_led = pyb.LED(3)
-blue_led.off()
-
-class DataTX():
-    img_width = 320
-    img_height = 240
-    sent = False
-    buff = None
-
-dataTX = DataTX()
-dataRX = DataTX()
-dataTX.buff = sensor.alloc_extra_fb(DataTX.img_width, DataTX.img_height, sensor.RGB565)
-dataRX.buff = sensor.alloc_extra_fb(DataTX.img_width, DataTX.img_height, sensor.RGB565)
+from pyb import Pin, SPI
 
 pin_busy = Pin.board.P7
 pin_spi_ss = Pin.board.P3
@@ -73,15 +44,46 @@ def set_pins_to_high_impedance(pins):
     for pin in pins:
         Pin(pin, Pin.AF_PP, af=Pin.AF5_SPI2)
 
-input_spi_ss = Pin(pin_spi_ss, pyb.Pin.IN)
-output_busy = Pin(pin_busy, pyb.Pin.OUT_PP)
-
-usb = pyb.USB_VCP()
+input_spi_ss = Pin(pin_spi_ss, Pin.IN)
+output_busy = Pin(pin_busy, Pin.OUT_PP)
+output_busy.value(1)
 
 def setup_spi():
-    return pyb.SPI(2, pyb.SPI.SLAVE, polarity=0, phase=0)
+    return SPI(2, SPI.SLAVE, polarity=0, phase=0)
 spi = setup_spi()
 set_pins_to_high_impedance(pins_spi_bus)
+
+from camera_slave_control import CameraSlaveControl
+import gc
+
+from pyb import LED, USB_VCP
+import sensor, image, utime, time
+
+sensor.reset()                      # Reset and initialize the sensor.
+sensor.set_pixformat(sensor.RGB565) # Set pixel format to RGB565 (or GRAYSCALE)
+sensor.set_framesize(sensor.QVGA)   # Set frame size to QVGA (320x240)
+sensor.skip_frames(time = 2000)     # Wait for settings take effect.
+clock = time.clock()                # Create a clock object to track the FPS.
+
+red_led = LED(1)
+red_led.off()
+green_led = LED(2)
+green_led.off()
+blue_led = LED(3)
+blue_led.off()
+
+class DataTX():
+    img_width = 320
+    img_height = 240
+    sent = False
+    buff = None
+
+dataTX = DataTX()
+dataRX = DataTX()
+dataTX.buff = sensor.alloc_extra_fb(DataTX.img_width, DataTX.img_height, sensor.RGB565)
+dataRX.buff = sensor.alloc_extra_fb(DataTX.img_width, DataTX.img_height, sensor.RGB565)
+
+usb = USB_VCP()
 
 blue_led.on()
 spi_error = False
@@ -215,12 +217,21 @@ while(True):
     if (input_spi_ss.value() == 1):
         output_busy.value(0)
     start_time = utime.ticks_ms()
+    refresh_image = False
     while (input_spi_ss.value() == 1):
         if utime.ticks_diff(utime.ticks_ms(), start_time) > 500:
             green_led.off()
             blue_led.off()
+            if utime.ticks_diff(utime.ticks_ms(), start_time) > 1000:
+                refresh_image = True
+                break
+
 
     output_busy.value(1)
+    if refresh_image:
+        print("Refresh cached image during idle mode")
+        continue
+
     set_pins_to_spi_af(pins_spi_bus)
     if not spi_error:
         green_led.on()
@@ -229,7 +240,7 @@ while(True):
         spi = setup_spi()
 
     try:
-        spi.send_recv(dataTX.buff.bytearray(), dataRX.buff.bytearray(), timeout=1000)
+        spi.send_recv(dataTX.buff.bytearray(), dataRX.buff.bytearray(), timeout=5000)
         spi.recv(control.buff, timeout=1000)
         red_led.off()
     except OSError as err:

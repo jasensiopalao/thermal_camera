@@ -33,6 +33,10 @@ class AuxCamera():
     TX_VOLTAGE_H = 4
     TX_VOLTAGE_L = 5
     TX_PIN_INT = 6
+    TX_TICKS_0 = 7
+    TX_TICKS_1 = 8
+    TX_TICKS_2 = 9
+    TX_TICKS_3 = 10
     TX_SPI_ERROR = SPI_BUFFER_SIZE - 1
 
     SPI_ERROR_UNDEFINED = 0
@@ -41,6 +45,8 @@ class AuxCamera():
     SPI_ERROR_OVERWRITE = (1<<2)
     SPI_ERROR_OUT_OF_INDEX = (1<<3)
     SPI_ERROR_PACKAGE_COUNT = (1<<4)
+
+    tick_to_time = 0.262140
 
     def __init__(self, spi):
         self._verbose = False
@@ -54,17 +60,30 @@ class AuxCamera():
         self._restart = True
         self._restart_complete = False
 
-    def initialize(self):
+    def initialize(self, timeout_ms=1000):
         self._restart = True
         self._restart_complete = False
-        self.sync()
+        return self.sync(timeout_ms=timeout_ms)
 
-    def sync(self):
+    def ticks(self):
+        count = (
+            (self._rx_buf[self.TX_TICKS_0]) +
+            (self._rx_buf[self.TX_TICKS_1] << 8) +
+            (self._rx_buf[self.TX_TICKS_2] << 16) +
+            (self._rx_buf[self.TX_TICKS_3] << 24)
+        )
+        return count
+
+    def time(self):
+        return self.tick_to_time * self.ticks()
+
+    def sync(self, timeout_ms=1000):
+        start_time = utime.ticks_ms()
         if self._verbose:
             print("Sync_start")
         value = self.transfer()
         i = 1
-        while i < 10 and (self._restart or not self._restart_complete or not value):
+        while (utime.ticks_diff(utime.ticks_ms(), start_time) < timeout_ms) and (self._restart or not self._restart_complete or not value):
             value = self.transfer()
             i += 1
         if self._verbose:
@@ -88,6 +107,9 @@ class AuxCamera():
         if self._tx_buf[self.SPI_BUFFER_SIZE] == 0:
             return True
         return self._tx_buf[self.SPI_BUFFER_SIZE] == self._rx_buf[self.SPI_BUFFER_SIZE]
+
+    def number_package_received(self):
+        return self._rx_buf[self.SPI_BUFFER_SIZE]
 
     def transfer(self):
         self._spi.lock()
@@ -123,9 +145,8 @@ class AuxCamera():
             print("exit", self._tx_buf[self.size], self._rx_buf[self.size])
             return False
 
-        if (self._rx_buf[self.TX_SPI_ERROR] & 1) == 0:
-            if self._verbose:
-                print("Error byte null")
+        if self._rx_buf[self.TX_SPI_ERROR] != 1:
+            print("Error byte: ", self._rx_buf[self.TX_SPI_ERROR])
             return False
 
         if self._rx_buf[self.SPI_BUFFER_SIZE] == 1:
@@ -139,6 +160,7 @@ class AuxCamera():
             '[{}]'.format(self._tx_buf[self.SPI_BUFFER_SIZE]),
             ' '.join('{:02x}'.format(x) for x in self._rx_buf),
             "battery", self.battery_millivolts,
+            "time", self.time(),
             "Errors {0:b}".format(self._rx_buf[self.TX_SPI_ERROR]),
         )
 
@@ -301,6 +323,24 @@ from pyb import Pin
 import time
 from ustruct import pack
 
+
+
+@micropython.viper
+def pixel2pixel(src: ptr8):
+    columns_image = 320
+    rows_image = 240
+
+    image_size = columns_image * rows_image * 2
+    index = 0
+    while index < image_size:
+        pix1 = src[index]
+        pix2 = src[index+1]
+        src[index] = pix2
+        src[index+1] = pix1
+        index += 2
+
+from uctypes import bytearray_at
+
 class TFT():
     st7735 = const(1)
     ili9341 = const(2)
@@ -319,10 +359,12 @@ class TFT():
         self.hspi.write(data)
         self.hspi.release()
 
-    def __init__(self, spi, pin_dc):
+    def __init__(self, spi, pin_dc, framebuffer_swap_endianness=False, fast_byteswap=False):
         self.hspi = spi
         self.dc = Pin(pin_dc, Pin.OUT_PP)
         self.dc.value(0)
+        self.framebuffer_swap_endianness = framebuffer_swap_endianness
+        self.fast_byteswap = fast_byteswap
 
     def initialize(self):
 
@@ -342,7 +384,7 @@ class TFT():
             (0xc5, b'\x31\x3c'),  # VCM Control 1 \x3e\x28 b'\x18\x64'
             (0xc7, b'\x9f'),  # VCM Control 2 \x86
             (0x36, b'\xF8'),  # Memory Access Control
-            (0x3a, b'\x55'),  # Pixel Format
+            (0x3a, b'\x55'),  # Pixel Format 55
             (0xb1, b'\x00\x1b'),  # FRMCTR1
             (0xb6, b'\x0a\x82\x27'),  # Display Function Control
             (0xf2, b'\x00'),  # 3Gamma Function Disable
@@ -413,7 +455,23 @@ class TFT():
 
     def write_to_screen(self, data):
         self.send_spi(bytearray([_RAMWR]),False)  # set to write to RAM
-        self.send_spi(data, True)                 # send data
+        self.dc.value(True) #set data/command pin
+        self.hspi.lock()
+        if self.framebuffer_swap_endianness:
+            if self.fast_byteswap:
+                # Sacrify one pixel and avoid needing a byte swap
+                # Make the count in the screen driver already increase by one
+                #self.hspi.send(bytearray([0]))  # Displayed as black
+                m = memoryview(data)
+                self.hspi.send(bytearray([0]*19))
+                #self.hspi.send(m[0:19])  # The ptr8 in the ST will already swap the bytes while accessing it
+                self.hspi.send(m[20:])  # The ptr8 in the ST will already swap the bytes while accessing it
+            else:
+                pixel2pixel(data)
+                self.hspi.send(data)
+        else:
+            self.hspi.send(data)
+        self.hspi.release()
 
 from ucollections import namedtuple
 
@@ -425,6 +483,7 @@ class Menu():
 
     def __init__(self):
         self.ancestor = []
+        self.ancestor_cursor = []
         self._structure = {}
         self.active = self._structure
         self.entity_order = []
@@ -467,8 +526,8 @@ class Menu():
         self.cursor_display_start = max(0, self.cursor - half_lines,  )
         self.cursor_display_end = min(cursor_max, self.cursor_display_start + self.cursor_lines )
 
-    def cursor_load(self):
-        self.cursor = 0
+    def cursor_load(self, position=0):
+        self.cursor = position
         self.cursor_entity = None
         self.cursor_items = []
         if "items" in self.active:
@@ -495,6 +554,7 @@ class Menu():
 
     def reset(self):
         self.ancestor.clear()
+        self.ancestor_cursor.clear()
         self.active = self.structure
         self.cursor_load()
         self.state_load()
@@ -502,6 +562,7 @@ class Menu():
     def enter(self, submenu):
         print("From level. Title: ", self.get_title())
         self.ancestor.append(self.active)
+        self.ancestor_cursor.append(self.cursor)
         self.active = submenu
         print("Enter sublevel. Title: ", self.get_title())
         self.cursor_load()
@@ -512,7 +573,7 @@ class Menu():
             print("Exit sublevel. Title: ", self.get_title())
             self.active = self.ancestor.pop()
         print("Back to sublevel. Title: ", self.get_title())
-        self.cursor_load()
+        self.cursor_load(position=self.ancestor_cursor.pop())
         self.state_load()
 
     def string_callback(self, parameters):
@@ -776,6 +837,45 @@ def qqvga2qvga(src: ptr16, dst: ptr16):
             irow_screen += 2
             irow_screen_1 = irow_screen + 1
 
+
+@micropython.viper
+def qqgrey2qvga(src: ptr8, dst: ptr16):
+    """ Fast method to increase the resolution from QQVGA to QVGA (approx time 7ms) """
+    columns_image = 160
+    rows_image = 120
+    image_size = columns_image * rows_image
+    icolumn_screen = 0
+    icolumn_screen_1 = icolumn_screen + 1
+    irow_screen = 0
+    irow_screen_1 = irow_screen + 1
+
+    columns_screen = 320
+    # assumption that the screen has double the lines of the image
+
+    index_image = 0
+    pixel565 = int(0)
+    while index_image < image_size:
+        pixel = int(src[index_image])
+        pixel_2 = pixel >> 2
+        pixel_3 = pixel_2 >> 1
+        pixel565 = (pixel_3 << 11) | (pixel_2 << 5) | (pixel_3)
+        index_image += 1
+
+        icolumn_screen_1 = icolumn_screen + 1
+        irow_screen_index = irow_screen   * columns_screen
+        dst[icolumn_screen   + irow_screen_index] = pixel565
+        dst[icolumn_screen_1 + irow_screen_index] = pixel565
+        irow_screen_index = irow_screen_1   * columns_screen
+        dst[icolumn_screen   + irow_screen_index] = pixel565
+        dst[icolumn_screen_1 + irow_screen_index] = pixel565
+
+        icolumn_screen += 2
+
+        if icolumn_screen >= columns_screen:
+            icolumn_screen = 0
+            irow_screen += 2
+            irow_screen_1 = irow_screen + 1
+
 @micropython.viper
 def increase_image_viper(src: ptr16, dst: ptr16, pixels: int):
     columns_image = 160
@@ -816,22 +916,34 @@ class Settings():
     def __init__(self, file_name):
         self.file_name = file_name
         self.dict = {}
+        self.read()
 
-    def read(self):
+    def read(self, from_backup=False):
+        file_name = self.file_name
+        if from_backup:
+            file_name += ".bak"
         try:
-            with open(self.file_name, "r") as f:
-                self.dict = ujson.load(f)
-            if self.dict is None:
+            with open(file_name, "r") as f:
+                dict = ujson.load(f)
+            if dict is None:
                 print("Empty file")
-                self.dict = {}
+                dict = {}
+            # Update the values in self.dict, not by replacing, since users already have a ref
+            self.dict.clear()
+            for key,value in dict.items():
+                self.dict[key] = value
+
         except Exception as e:
             print("Exception", e)
-            with open(self.file_name, "w") as f:
+            with open(file_name, "w") as f:
                 ujson.dump(self.dict, f)
 
         print("read:", ujson.dumps(self.dict))
 
-    def write(self):
+    def write(self, to_backup=False):
+        file_name = self.file_name
+        if to_backup:
+            file_name += ".bak"
         print("save:", ujson.dumps(self.dict))
-        with open(self.file_name, "w") as f:
+        with open(file_name, "w") as f:
             ujson.dump(self.dict, f)
