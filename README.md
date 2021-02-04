@@ -1,71 +1,54 @@
-# Table of Contents  
+# Thermal Camera & Visual Image Fusion by [Jonatan Asensio Palao](https://es.linkedin.com/in/jonatan-asensio-palao-369a4143)
+
+### Table of Contents  
 
 [Introduction](#introduction)  
-[Hardware](#hardware)  
+[Electronic design](#electronic_design)  
 [Results](#results)  
+
+<p align="center">
+<img width="320" height="240" src="photos/Result_1_only_thermal.jpeg">
+</p>
 
 <a name="introduction"/>
 
-# Introduction
+## Introduction
 
-Thermal camera using 2 Openmv with fusion of Thermal and Visual images
+This project details the software and hardware to build a portable thermal camera with visual image fusion.
 
-Code for:
 - Openmv H7 Thermal image as master SPI node
 - Openmv H7 Plus Visual image as slave SPI node
-- PIC 16F886 as auxiliar processor
-- Touch screen with ILI9341 and XPT2046
-
-<a name="hardware"/>
-
-# Hardware
-
-The following devices share SCLK, MISO and MOSI:
-
-- Openmv H7 with Lepton 3.5. SPI Master.
-- Openmv H7 Plus with OV7725 (The sensor that comes with H7). Reasoning:
-  - OV7725 has bigger pixle size than OV5640, so OV7725 is more sensitive in dark conditions
-  - OV5640 openmv driver wasn't as fast as the one for OV7725 at the time of building the project
-- AuxilarProcessor. PIC 16F886 compiled with [BoostC (free compiler)](http://www.sourceboost.com/Products/BoostC/Overview.html)
-  - Buttons debouncing
-  - Battery voltage averaging
-  - Indication LED for Input read From Master Openmv.
-- ILI9341 TFT screen
-- XPT2046 Touch screen
-
-Additional Pinout
-- Shared pin from AuxilarProcessor and XPT2046 to indicate to the Master that input data is ready
-- command/data pin for ILI9341
-- Slave Openmv busy pin, to indicate to the Master that the visual image isn't ready
+- PIC 16F886 as auxiliar processor (RTC, buttons, battery measurement)
+- 2.8" Touch screen with ILI9341 and XPT2046 with 
 
 
-Charger module TP4056. Supplier specs:
-- Input interface: Type-c USB.
-- Battery overcharge lifting voltage: 4.00 V
-- Battery: over-current protection current 3 A
-- Maximum charging current output: 1000 ma
-- Light state: no load the light not bright, red light for recharging, is full of green light.
 
-[Link used to buy it](https://www.amazon.es/gp/product/B07PKMM8Z3/ref=ppx_yo_dt_b_asin_title_o02_s00?ie=UTF8&psc=1)
+![Front](photos/cam_front.jpeg)
+![Back](photos/cam_back.jpeg)
 
+<a name="electronic_design"/>
 
-![Front](/photos/cam_front.jpeg)
-![Back](/photos/cam_back.jpeg)
-![Inside](/photos/cam_inside.jpeg)
-![Inside look at the auxiliar processor PIC 16F886](/photos/cam_inside_pic16f886.jpeg)
+## Electronic design
 
+![](schematics/thermal_camera_version_1_0.gif)
+
+See: [Design decisions involved in version 1](doc/architecture_design_record_001.md)
+
+[More info for version 1]: doc/architecture_design_record_001.md	"Design decisions involved in version 1"
 
 <a name="results"/>
 
-# Results
+## Hardware mounting
 
-![Thermal Vision indoor](/photos/Result_1_only_thermal.jpeg)
-![Thermal Vision outdoor](/photos/Result_2_only_thermal.jpeg)
-![Fusion Vision outdoor](/photos/Result_3_fusion_thermal_visual.jpeg)
-![Fusion Vision indoor](/photos/Result_4_fusion_thermal_visual.jpeg)
+![Inside](photos/cam_inside_assembled.jpeg)
+![Inside look at the auxiliar processor PIC 16F886](photos/cam_inside_disassembled.jpeg)
 
-# TODOs
+Mounting of Lepton 3.5 See: [Design decisions involved in version 1](doc/lepton_mounting.md)
 
-schematics
-references
+## Results
+
+
+![Thermal Vision outdoor](photos/Result_2_only_thermal.jpeg)
+![Fusion Vision outdoor](photos/Result_3_fusion_thermal_visual.jpeg)
+![Fusion Vision indoor](photos/Result_4_fusion_thermal_visual.jpeg)
 

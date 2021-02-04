@@ -1,1 +1,1 @@
-{"touch": {"y_offset": 512, "x_offset": 354, "y_factor": 1.256135, "x_factor": 1.165339}, "camera_slave": {"column_zoom_denominator": 20, "row_zoom_numerator": 25, "row_offset": 23, "column_zoom_numerator": 25, "row_zoom_denominator": 20, "column_offset": 18}}
+{"touch": {"y_factor": 1.256135, "x_factor": 1.165339, "y_offset": 512, "x_offset": 354}, "camera": {"always_pixel_pointer": true}, "camera_slave": {"column_zoom_denominator": 20, "row_zoom_numerator": 24, "row_offset": 23, "column_zoom_numerator": 25, "row_zoom_denominator": 20, "column_offset": 17}}
