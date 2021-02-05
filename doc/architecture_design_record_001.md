@@ -1,3 +1,7 @@
+
+[Back to Main](../README.md)
+
+
 <a name="Software frameworks"/>
 
 # Software tooling
@@ -47,8 +51,8 @@ Power supply was implemented with 2 modules which provide the following set of f
 
 
 
-![charger_module_TP4056](D:\Datos Jasp\C\Archivos\Electronica\+Proyectos\Calabaza_Entrenamiento\thermal_camera\datasheets\charger_module_TP4056.JPG)
+![charger_module_TP4056](../datasheets/charger_module_TP4056.JPG)
 
-![voltage_regulator_MT3608](D:\Datos Jasp\C\Archivos\Electronica\+Proyectos\Calabaza_Entrenamiento\thermal_camera\datasheets\voltage_regulator_MT3608.JPG)
+![voltage_regulator_MT3608](../datasheets/voltage_regulator_MT3608.JPG)
 
-![screen_2_8_inch](D:\Datos Jasp\C\Archivos\Electronica\+Proyectos\Calabaza_Entrenamiento\thermal_camera\datasheets\screen_2_8_inch.jpg)
+![screen_2_8_inch](../datasheets/screen_2_8_inch.jpg)
