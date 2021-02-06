@@ -1,4 +1,4 @@
-![](../photos/Lepton_3_5_secured.jpg)
+![Lepton_3_5_secured_1](../photos/Lepton_3_5_secured.jpg)
 
 ![Lepton_3_5_secured_2](../photos/Lepton_3_5_secured_2.jpg)
 
