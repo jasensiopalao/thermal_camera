@@ -20,12 +20,7 @@
 #OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 #SOFTWARE.
 
-camera_version = "1.6"
-
-# Consumption. ON: 0.6-0.7 Amps. OFF: 350 uAmps
-# script files in main flash pyb.Flash() AttributeError: 'module' object has no attribute 'Flash'
-#         /sd and /flash don't work
-# save only if sd card
+camera_version = "1.7"
 
 import utime as time
 import pyb
@@ -794,9 +789,9 @@ def load_menu(time_settings, settings, menu, touch, camera, camera_slave, screen
             Menu.Entity(text="Calibration", action={
                 "title": (lambda: "Date {}\nSeconds: {}".format(time_datetime2string(), get_forward_seconds())) ,
                 "shutter":  back_no_text,
-                "top": Menu.Entity(text="Up", action=(change_time_calibration_factor, {"modify_amount":0.00002})),
+                "top": Menu.Entity(text="Up", action=(change_time_calibration_factor, {"modify_amount":0.000005})),
                 "middle": Menu.Entity(text=(lambda: "Finish adjusting factor {}".format(get_time_calibration_factor())), action=[menu.back, time_settings_write]),
-                "bottom": Menu.Entity(text="Down", action=(change_time_calibration_factor, {"modify_amount":-0.00002})),
+                "bottom": Menu.Entity(text="Down", action=(change_time_calibration_factor, {"modify_amount":-0.000005})),
             }),
         ]
     }
@@ -1422,10 +1417,9 @@ def loop(camera, screen, menu, input_handler, camera_slave, **kwargs):
                 elif camera_preview is CameraPreview.THERMAL or camera_preview is CameraPreview.MIX:
                     img.to_rainbow(color_palette=sensor.PALETTE_IRONBOW) # color it
                 elif camera_preview is CameraPreview.THERMAL_ANALYSIS:
-
+                    # Color tracking concept from lepton_object_temp_color_1.py in the OpenMV examples
                     # Color Tracking Thresholds (Grayscale Min, Grayscale Max)
                     threshold_list = [(200, 255)]
-
 
                     blob_stats = []
                     blobs = img.find_blobs(threshold_list, pixels_threshold=200, area_threshold=200, merge=True)
