@@ -1,17 +1,13 @@
-
 [Back to Main](../README.md)
-
-Github: https://github.com/jasensiopalao/thermal_camera
-
 
 ### Table of Contents  
 
-[Introduction](#introduction)  
-[Changes to use a 32kHz crystal](#changes_32k_crystal)  
-[Troubleshooting](#troubleshooting)
-[Further power consumption optimizations](#further_power_consumption_optimizations)
-[Assembly](#assembly)
-[References](#references)
+- [Introduction](#introduction)  
+- [Changes to use a 32kHz crystal](#changes_32k_crystal)  
+- [Troubleshooting](#troubleshooting)
+- [Further power consumption optimizations](#further_power_consumption_optimizations)
+- [Assembly](#assembly)
+- [References](#references)
 
 further_low_power_consumption_optimizations
 
@@ -33,13 +29,13 @@ The PIC16F886 has all the circuitry required for driving an external crystal 32.
 ![](../doc/external/timer1_crystal.jpg)
 
 From what I have learnt in this process I got the following conclusions:
-  * C1, C2 and Rs seem to be crucial to get the power consumption and the accuracy right. They don´t need to have an exact value, but completely ignoring them can lead to quite some frustration.
+  * C1, C2 and Rs seem to be crucial to get the power consumption and the accuracy right. They don't need to have an exact value, but completely ignoring them can lead to quite some frustration.
   * Higher C1 and C2 values will provide higher stability at the cost of more consumption. C1xC2/(C1+C2) + C_strays ~= C_crystal_load (C_strays seems to be any other parasitic capacitances)
-  * Rs will help to not over-drive the crystal. A consequence of the crystal being overdriven can actually be that you see it counting slower! However Rs value will depend very much on the Device that it is being used. Sadly I couldn´t find in the datasheet of the PIC16F886 nor in the datasheet of the crystal any indication about parameters related to this value. Furthermore, the [AN849](../doc/external/32k_osc/Microchip_AN849.pdf) Guide from Microchip states that this value should not exceed 100k, and contradictorily, in [TP097](../doc/external/32k_osc/Microchip_TP097.pdf) Guide from Microchip it used a 220k.
+  * Rs will help to not over-drive the crystal. A consequence of the crystal being overdriven can actually be that you see it counting slower! However Rs value will depend very much on the Device that it is being used. Sadly I couldn't find in the datasheet of the PIC16F886 nor in the datasheet of the crystal any indication about parameters related to this value. Furthermore, the [AN849](../doc/external/32k_osc/Microchip_AN849.pdf) Guide from Microchip states that this value should not exceed 100k, and contradictorily, in [TP097](../doc/external/32k_osc/Microchip_TP097.pdf) Guide from Microchip it used a 220k.
  
 Finally I chose the following (limited also by what I had in stock):
   * [MS3V-T1R 7pF](../doc/external/32k_osc/Crystal_MS3V-T1R.pdf)
-  * Capacitors: C1 and C2 as 16pF caps (each one was actually two of 33pF in series). C1xC2/(C1+C2) would be 8.5pF which is close to the 7pF. Here I didn´t consider the C_strays, as in the datasheet I couldn´t get a final conclusion. On the one hand it indicates 50pF, on the other it says that the osc design for timer1 osc is the same as for the main LP osc.
+  * Capacitors: C1 and C2 as 16pF caps (each one was actually two of 33pF in series). C1xC2/(C1+C2) would be 8.5pF which is close to the 7pF. Here I didn't consider the C_strays, as in the datasheet I couldn't get a final conclusion. On the one hand it indicates 50pF, on the other it says that the osc design for timer1 osc is the same as for the main LP osc.
   * Rs: 240k (two SMD 120k). As [TP097](../doc/external/32k_osc/Microchip_TP097.pdf) guide used a similar crystal to the one I bought, I chose to go with a value close to 220k.
 
 Finally, this complete implementation turned out very well as the PIC consumption while timer 1 is counting and the PIC is sleeping it rounds up to ~3.5 uA.

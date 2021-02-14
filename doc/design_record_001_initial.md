@@ -1,13 +1,10 @@
-
 [Back to Main](../README.md)
-
-Github: https://github.com/jasensiopalao/thermal_camera
 
 ### Table of Contents  
 
-[Software Tooling](#software_tooling)  
-[Hardware Components](#hardware_components)  
-[Assembly](#assembly)
+- [Software Tooling](#software_tooling)  
+- [Hardware Components](#hardware_components)  
+- [Assembly](#assembly)
 
 
 <a name="software_tooling"/>
