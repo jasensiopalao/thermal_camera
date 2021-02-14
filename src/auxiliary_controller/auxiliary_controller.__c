@@ -1,0 +1,12 @@
+[Settings]
+Target=PIC16F886
+Active Compiler=BoostC
+Active Config=Debug
+Last Ext=h
+[Files]
+Count=5
+File0=adc.h
+File1=auxiliary_controller.c
+File2=spi.h
+File3=uart.h
+File4=utils.h

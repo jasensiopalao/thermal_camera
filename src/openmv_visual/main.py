@@ -27,7 +27,14 @@
 # OpenMV Cam Serial Clock        (P2)
 # OpenMV Cam Slave Select        (P3)
 
-from pyb import Pin, SPI
+from pyb import LED, USB_VCP, Pin, SPI
+import sensor
+import image
+import utime, time
+
+from utils.image import qvgafov2qvga
+
+from components.camera_slave import CameraSlaveControl
 
 pin_busy = Pin.board.P7
 pin_spi_ss = Pin.board.P3
@@ -52,12 +59,6 @@ def setup_spi():
     return SPI(2, SPI.SLAVE, polarity=0, phase=0)
 spi = setup_spi()
 set_pins_to_high_impedance(pins_spi_bus)
-
-from camera_slave_control import CameraSlaveControl
-import gc
-
-from pyb import LED, USB_VCP
-import sensor, image, utime, time
 
 sensor.reset()                      # Reset and initialize the sensor.
 sensor.set_pixformat(sensor.RGB565) # Set pixel format to RGB565 (or GRAYSCALE)
@@ -87,100 +88,6 @@ usb = USB_VCP()
 
 blue_led.on()
 spi_error = False
-
-@micropython.viper
-def qvgafov2qvga(
-    src: ptr16,
-    dst: ptr16,
-    column_offset: int,
-    row_offset: int,
-    column_zoom_numerator: int,
-    column_zoom_denominator: int,
-    row_zoom_numerator: int,
-    row_zoom_denominator: int,
-):
-    """ Fast method to expand the FOI to the full dst frame buffer """
-    columns = 320
-    rows = 240
-    image_size = columns * rows
-
-    icolumn_src = column_offset
-    irow_src = row_offset
-    icolumn_dst = 0
-    irow_dst = 0
-
-    # assumption that the screen has double the lines of the image
-
-    # assume column_zoom_denominator < column_zoom_numerator
-    column_fraction_copy = column_zoom_numerator - column_zoom_denominator
-    row_fraction_copy = row_zoom_numerator - row_zoom_denominator
-
-    icolumn_action = 0
-    irow_action = 0
-    index_src = icolumn_src + irow_src * columns
-
-    copies_per_column_copy = column_zoom_numerator // column_zoom_denominator
-    columns_to_copy = 0  # Per block columns to be copied
-    columns_copied = 0
-    column_copied = 0
-
-    copies_per_row_copy = row_zoom_numerator // row_zoom_numerator
-    rows_to_copy = 0
-    rows_copied = 0
-    row_copied = 0
-    #print(
-        #"column_fraction_copy", column_fraction_copy, "copies_per_column_copy", copies_per_column_copy,
-        #"row_fraction_copy", row_fraction_copy, "copies_per_row_copy", copies_per_row_copy
-    #)
-    while True:
-
-        index_src = icolumn_src + irow_src * columns
-        pixel = src[index_src]
-        dst[icolumn_dst   + irow_dst   * columns] = pixel
-        #print(icolumn_src, irow_src, icolumn_dst, irow_dst, "action", icolumn_action, irow_action, "copy", columns_to_copy, rows_to_copy)
-        if columns_to_copy == 0 and column_copied != icolumn_src and columns_copied < column_fraction_copy:
-            columns_to_copy = copies_per_column_copy
-
-        if columns_to_copy > 0:
-            columns_to_copy -= 1
-            column_copied = icolumn_src
-            columns_copied += 1
-        else:
-            icolumn_src += 1
-
-        icolumn_action += 1
-        if icolumn_action >= column_zoom_numerator:
-            icolumn_action = 0
-            columns_copied = 0
-
-        icolumn_dst += 1
-        if icolumn_dst >= columns or icolumn_src >= columns:
-            icolumn_dst = 0
-            icolumn_src = column_offset
-            icolumn_action = 0
-            columns_copied = 0
-
-            #print(icolumn_src, irow_src, icolumn_dst, irow_dst, "action", icolumn_action, irow_action, "copy", columns_to_copy, rows_to_copy)
-
-            if rows_to_copy == 0 and row_copied != irow_src and rows_copied < row_fraction_copy:
-                rows_to_copy = copies_per_row_copy
-
-            if rows_to_copy > 0:
-                rows_to_copy -= 1
-                row_copied = irow_src
-                rows_copied += 1
-            else:
-                irow_src += 1
-
-            irow_action += 1
-            if irow_action >= row_zoom_numerator:
-                irow_action = 0
-                rows_copied = 0
-
-            irow_dst += 1
-            if irow_dst >= rows or irow_src >= rows:
-                return
-
 
 debug_image = False
 

@@ -15,7 +15,7 @@ Compilation from PIC: [BoostC (free compiler with active development)](http://ww
 
 Schematic design: Autocad Eagle. Free license available
 
-<a name="hardware"/>
+<a name="hardware_components"/>
 
 # Hardware Components
 
