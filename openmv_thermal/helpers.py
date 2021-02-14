@@ -46,7 +46,7 @@ class AuxCamera():
     SPI_ERROR_OUT_OF_INDEX = (1<<3)
     SPI_ERROR_PACKAGE_COUNT = (1<<4)
 
-    tick_to_time = 0.262140
+    tick_to_time = (1/(32768)*2**16)
 
     def __init__(self, spi):
         self._verbose = False
