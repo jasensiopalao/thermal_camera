@@ -1,14 +1,14 @@
 
-A portable thermal camera with visual image fusion.
-
 <p align="center">
+A portable thermal camera with visual image fusion <br><br>
 <img width="320" height="240" src="photos/Result_1_only_thermal.jpeg">
 </p>
 
 ### Table of Contents  
 
-- [Introduction](#introduction)  
-- [Electronic design](#electronic_design)
+- [Introduction](#introduction)
+- [Electronics](#electronics)
+- [Software](#software)
 - [Results](#results)  
 - [Hardware mounting](#hardware_mounting)  
 - [References](#references)
@@ -37,9 +37,9 @@ This project details the software and hardware to build a portable camera which 
 ![Front](photos/cam_front.jpeg)
 ![Back](photos/cam_back.jpeg)
 
-<a name="electronic_design"/>
+<a name="electronics"/>
 
-## Electronic design
+## Electronics
 
 ![](schematics/thermal_camera_version_1_1.gif)
 
@@ -48,6 +48,44 @@ See: [Design decisions involved in version 1](doc/design_record_001_initial.md)
 ### Design records:
 * [Initial](doc/design_record_001_initial.md)
 * [Real Time Clock Improvement](doc/design_record_002_rtc_improvement.md)
+
+<a name="software"/>
+
+## Software
+
+Main features:
+
+* Save photos in bmp format
+* Choose a preview mode:
+   1. Thermal mode with Non-linear color
+   2. Same as mode-1 with temperature blobs detection
+   3. Thermal mode with Linear Grey (ideal for: Night vision. Playback analysys of pictures)
+   4. Visual image. Image from the Openmv with visual camera
+   5. Mix image. Interlaced images from mode-1 and mode-4
+* Thermal options:
+   * Manual trigger of the Flat Field Correction
+   * Change Emissivity
+   * Choose Gain mode
+   * Set a static or dynamic temperature range:
+      * Both methods will use radiometric measurements and deliver absolute temperature.
+      * Static will saturate the image color at the desired minimum/maximum. Useful for identifying a specific temperature
+      * Dynamic will adjust minimum and maximum of the image scene and get best overall contrast.
+      * The chosen mode can be saved for next usages.
+   * Touch the screen to get the temperature in a specific point
+      * Setting to enable/disable cursor in full screen mode   
+* Playback photos
+   * Navigate up and down through saved photos
+   * Analysis of pixel temperatures (Valid for grey-scale thermal images)
+   * Delete photos
+* Utility features:
+   * Set time and date
+   * Save and restore settings
+   * Calibrate touch coordinates
+   * Calibrate Field of view of the visual image, to perfectly match the Thermal image for preview mode-5
+
+For further indications on how to use and understand the software:
+- [Software description](doc/software_description.md)
+- [Software deployment](doc/software_deployment.md)
 
 <a name="hardware_mounting"/>
 
