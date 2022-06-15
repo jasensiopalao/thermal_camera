@@ -58,7 +58,7 @@ def save_thermal_settings(settings, thermal):
 
 
 def load_thermal_settings(settings, thermal):
-    if "control" not in settings.dict:
+    if "thermal" not in settings.dict:
         return
     control_settings = settings.dict["thermal"]
 

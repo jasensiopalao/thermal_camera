@@ -20,375 +20,179 @@
 #OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 #SOFTWARE.
 
-from utils.menu import Menu
+from ucollections import namedtuple
 
-from utils.rtc_time import time_datetime2string, time_modify_rtc
-from .control import CameraState
+class Menu():
 
-def load_menu(components):
+    Entity = namedtuple("Entity", ("text", "action"))
+    NoText = None
+    NoAction = None
 
-    menu_preview = create_menu_preview(**components)
-    menu_playback = create_menu_playback(**components)
+    def __init__(self):
+        self.ancestor = []
+        self.ancestor_cursor = []
+        self._structure = {}
+        self.active = self._structure
+        self.entity_order = []
+        self.cursor = 0
+        self.cursor_display_start = 0
+        self.cursor_display_end = 0
+        self.cursor_items = []
+        self.cursor_entity = None
+        self.cursor_lines = 6
+        self.state = ""
+        self.page = ""
+        
+        self.entity_scroll_up = Menu.Entity(text=None, action=self.cursor_decrement)
+        self.entity_scroll_down = Menu.Entity(text=None, action=self.cursor_increment)
+        self.entity_scroll_selection = Menu.Entity(text=None, action=self.cursor_action)
 
-    menu = components["menu"]
+        self.entity_back_action = Menu.Entity(text="Back", action=self.back)
+        self.entity_back_no_text = Menu.Entity(text=None, action=self.back)
+        self.entity_reset_no_text = Menu.Entity(text=None, action=self.reset)
 
-    def save_img(camera, **_):
-        print("Snapshot...")
-        camera.to_save_img = True
+    def cursor_text(self):
+        if not self.cursor_entity:
+            return ""
+        return self.string_callback(self.cursor_entity.text)
 
-    def next_preview():
-        camera.next_preview()
-        save_camera_settings(settings=settings, camera=camera)
+    def cursor_action(self):
+        if not self.cursor_entity:
+            return ""
+        return self.string_callback(self.cursor_entity.action)
 
-    menu.structure = {
-        "state": CameraState.PREVIEW,
-        "page": "ROOT",
-        "title": "", # (lambda: "{}".format(camera.last_img_number)),
-        "shutter": Menu.Entity(text=None, action=(save_img, components) ),
-        "top" : Menu.Entity(text=None, action=next_preview),
-        "middle": Menu.Entity(text=None, action={
-            "state": CameraState.PREVIEW,
-            "page": "INFO",
-            "title": (lambda: camera.preview_info() + thermal.get_thermal_statistics()),
-            "shutter": Menu.Entity(text=None, action=(save_img, components) ),
-            "top" : Menu.Entity(text="Views", action=next_preview),
-            "middle": Menu.Entity(text="Menu", action=menu_preview),
-            "bottom" :  Menu.Entity(text="Hide / Playback", action=menu.back),
-            "postview": Menu.Entity(text=None, action={"state": CameraState.POSTVIEW, "title": "SNAPSHOT"}),
-        }),
-        "bottom" : Menu.Entity(text=None, action=menu_playback),
-        "postview": Menu.Entity(text=None, action={"state": CameraState.POSTVIEW, "title": "SNAPSHOT"}),
-    }
+    def cursor_increment(self):
+        self.cursor += 1
+        self.cursor_update()
 
-    menu.entity_order = ["top", "middle", "bottom"]
+    def cursor_decrement(self):
+        self.cursor -= 1
+        self.cursor_update()
 
-    logger.info("Menu initialized")
+    def cursor_update(self):
+        cursor_max = len(self.active["items"]) - 1
+        # Wrap around
+        if self.cursor < 0:
+            self.cursor = cursor_max
+        if self.cursor > cursor_max:
+            self.cursor = 0
+        self.cursor_entity = self.cursor_items[self.cursor]
+        half_lines = round(self.cursor_lines)//2
+        self.cursor_display_start = max(0, self.cursor - half_lines,  )
+        self.cursor_display_end = min(cursor_max, self.cursor_display_start + self.cursor_lines )
 
-def create_menu_playback(time_settings, settings, menu, touch, camera, camera_slave, screen, auxiliary_controller, **_):
-    def save_fb_as_startup():
-        camera.to_save_fb_as_startup = True
+    def cursor_load(self, position=0):
+        self.cursor = position
+        self.cursor_entity = None
+        self.cursor_items = []
+        if "items" in self.active:
+            print("Load list")
+            self.cursor_items = self.active["items"]
+            if self.active["items"]:
+                self.cursor_update()
 
-    return {
-        "state": CameraState.PLAYBACK,
-        "page": "PHOTO_VIEW",
-        "title": (lambda: "{} [{}]".format(camera.playback_img_name, camera.playback_index)),
-        "shutter": reset_no_text,
-        "top" : Menu.Entity(text=None, action=camera.decrease_playback_index),
-        "middle": Menu.Entity(text=None, action={
-            "title": "OPTIONS",
-            "page": "MENU",
-            "shutter": menu.entity_back_no_text,
-            "top": menu.entity_scroll_up,
-            "bottom": menu.entity_scroll_down,
-            "middle": menu.entity_scroll_selection,
-            "items": [
-                Menu.Entity(text="Analysis", action={
-                    "page": "ANALYSIS",
-                    "title": (lambda: "{} [{}]".format(camera.playback_img_name, camera.playback_index)),
-                    "shutter": menu.entity_back_no_text,
-                    "top": menu.entity_back_no_text,
-                    "middle": menu.entity_back_no_text,
-                    "bottom": menu.entity_back_no_text,
-                }),
-                menu.entity_back_action,
-                Menu.Entity(text="Delete", action=[camera.delete_playback_img_name, menu.back]),
-                Menu.Entity(text="As Startup", action=[save_fb_as_startup, menu.back]),
-            ],
-        }),
-        "bottom" : Menu.Entity(text=None, action=camera.increase_playback_index),
-    }
-
-def create_menu_preview(time_settings, settings, menu, touch, camera, camera_slave, screen, auxiliary_controller, **_):
-
-    def get_time_calibration_factor():
-        return time_settings.dict.get("calibration_factor", 1.0)
-
-    def time_save():
-        time_rtc2dictionary(time_settings.dict)
-        time_settings.dict["reference_seconds"] = auxiliary_controller.time()
-        time_settings.write()
-        uos.sync()
-        logger.info("Time saved")
-        sync_time(logger, camera, screen, time_settings, auxiliary_controller)
-
-    def time_settings_write():
-        time_settings.write()
-
-    def entity_to_modify_time(unit):
-        return Menu.Entity(text=unit, action={
-            "title": time_datetime2string,
-            "shutter":  menu.entity_back_no_text,
-            "top": Menu.Entity(text="Up", action=(time_modify_rtc, {"modify_amount":1, "modify_unit": unit})),
-            "middle": Menu.Entity(text="Finish adjusting %s" % unit, action=menu.back),
-            "bottom": Menu.Entity(text="Down", action=(time_modify_rtc, {"modify_amount":-1, "modify_unit": unit})),
-        })
-
-
-    def get_forward_seconds():
-        auxiliary_controller.sync()
-        absolute_seconds = auxiliary_controller.time()
-        reference_seconds = time_settings.dict.get("reference_seconds", 581.4265)
-        return (absolute_seconds - reference_seconds) * get_time_calibration_factor()
-
-
-    def change_time_calibration_factor(modify_amount = 0.0001):
-        time_settings.dict["calibration_factor"] = get_time_calibration_factor() + modify_amount
-        sync_time(logger, camera, screen, time_settings, auxiliary_controller)
-
-    menu_time_change = {
-        "title": time_datetime2string,
-        "shutter": menu.entity_back_no_text,
-        "top": menu.entity_scroll_up,
-        "bottom": menu.entity_scroll_down,
-        "middle": menu.entity_scroll_selection,
-        "items": [
-            entity_to_modify_time("year"),
-            entity_to_modify_time("month"),
-            entity_to_modify_time("day"),
-            entity_to_modify_time("hour"),
-            entity_to_modify_time("minute"),
-            entity_to_modify_time("second"),
-            Menu.Entity(text="Save date/time change", action=[time_save, menu.back]),
-            Menu.Entity(text="Calibration", action={
-                "title": (lambda: "Date {}\nSeconds: {}".format(time_datetime2string(), get_forward_seconds())) ,
-                "shutter":  menu.entity_back_no_text,
-                "top": Menu.Entity(text="Up", action=(change_time_calibration_factor, {"modify_amount":0.000005})),
-                "middle": Menu.Entity(text=(lambda: "Finish adjusting factor {}".format(get_time_calibration_factor())), action=[menu.back, time_settings_write]),
-                "bottom": Menu.Entity(text="Down", action=(change_time_calibration_factor, {"modify_amount":-0.000005})),
-            }),
-        ]
-    }
-
-    def column_factor():
-        if camera_slave.control.column_zoom_denominator == 0:
-            return 999
-        return camera_slave.control.column_zoom_numerator/camera_slave.control.column_zoom_denominator
-
-    def row_factor():
-        if camera_slave.control.row_zoom_denominator == 0:
-            return 999
-        return camera_slave.control.row_zoom_numerator/camera_slave.control.row_zoom_denominator
-
-    column_offset_print = (lambda: "col offset {}".format(camera_slave.control.column_offset))
-    row_offset_print = (lambda: "row offset {}".format(camera_slave.control.row_offset))
-
-    column_factor_print = (lambda: "col factor {:.2f} {}/{}".format(column_factor(), camera_slave.control.column_zoom_numerator, camera_slave.control.column_zoom_denominator))
-    row_factor_print = (lambda: "row factor {:.2f} {}/{}".format(row_factor(), camera_slave.control.row_zoom_numerator, camera_slave.control.row_zoom_denominator))
-
-    view_factor_print = (lambda: "factor {:.2f} {:.2f}".format(row_factor(), column_factor()))
-
-    def full_field_of_view_camera_slave():
-        camera_slave.control.column_offset = 0
-        camera_slave.control.row_offset = 0
-        camera_slave.control.column_zoom_numerator = 20
-        camera_slave.control.column_zoom_denominator = 20
-        camera_slave.control.row_zoom_numerator = 20
-        camera_slave.control.row_zoom_denominator = 20
-
-
-    menu_camera_slave_calibration = {
-        "title": "Visual camera FIELD OF VIEW",
-        "page": "CAMERA_SLAVE_CALIBRATION",
-        "shutter": menu.entity_back_no_text,
-        "top": menu.entity_scroll_up,
-        "bottom": menu.entity_scroll_down,
-        "middle": menu.entity_scroll_selection,
-        "items": [
-            Menu.Entity(text=column_offset_print, action={
-                "title": column_offset_print,
-                "shutter":  menu.entity_back_no_text,
-                "top": Menu.Entity(text="Up", action=camera_slave.increase_column_offset),
-                "middle": menu.entity_back_action,
-                "bottom": Menu.Entity(text="Down", action=camera_slave.decrease_column_offset),
-            }),
-            Menu.Entity(text=row_offset_print, action={
-                "title": row_offset_print,
-                "shutter":  menu.entity_back_no_text,
-                "top": Menu.Entity(text="Up", action=camera_slave.increase_row_offset),
-                "middle": menu.entity_back_action,
-                "bottom": Menu.Entity(text="Down", action=camera_slave.decrease_row_offset),
-            }),
-            Menu.Entity(text=view_factor_print, action={
-                "title": view_factor_print,
-                "shutter":  menu.entity_back_no_text,
-                "top": Menu.Entity(text="Up", action=[camera_slave.increase_column_factor, camera_slave.increase_row_factor]),
-                "middle": menu.entity_back_action,
-                "bottom": Menu.Entity(text="Down", action=[camera_slave.decrease_column_factor, camera_slave.decrease_row_factor]),
-            }),
-            Menu.Entity(text=column_factor_print, action={
-                "title": column_factor_print,
-                "shutter":  menu.entity_back_no_text,
-                "top": Menu.Entity(text="Up", action=camera_slave.increase_column_factor),
-                "middle": menu.entity_back_action,
-                "bottom": Menu.Entity(text="Down", action=camera_slave.decrease_column_factor),
-            }),
-            Menu.Entity(text=row_factor_print, action={
-                "title": row_offset_print,
-                "shutter":  menu.entity_back_no_text,
-                "top": Menu.Entity(text="Up", action=camera_slave.increase_row_factor),
-                "middle": menu.entity_back_action,
-                "bottom": Menu.Entity(text="Down", action=camera_slave.decrease_row_factor),
-            }),
-            Menu.Entity(text="OK", action=[
-                (save_camera_slave_calibration_settings, {"settings": settings, "camera_slave": camera_slave}),
-                menu.back,
-            ]),
-            Menu.Entity(text="FULL Field of View", action=full_field_of_view_camera_slave),
-        ]
-    }
-
-    def touch_calibration_title():
-        xpoints = len(touch.x_calibration_points)
-        if not xpoints:
-            return "Drag the finger on screen"
+    def state_load(self):
+        if "state" in self.active:
+            self.state = self.active["state"]
+        if "page" in self.active:
+            self.page = self.active["page"]
         else:
-            return "{} points saved".format(xpoints)
+            self.page = ""
+    @property
+    def structure(self):
+        return self._structure
 
-    menu_touch_calibration = {
-        "title": touch_calibration_title,
-        "page": "TOUCH_CALIBRATION",
-        "shutter":  menu.entity_back_no_text,
-        "top": Menu.Entity(text="OK", action=[
-            touch.calibrate,
-            (save_touch_calibration_settings, {"settings": settings, "touch": touch}),
-            menu.back
-        ]),
-        "middle": menu.entity_back_action,
-        "items": [
-            Menu.Entity(text=(lambda: "x_offset {}".format(touch.x_offset)), action=None),
-            Menu.Entity(text=(lambda: "y_offset {}".format(touch.y_offset)), action=None),
-            Menu.Entity(text=(lambda: "x_factor {}".format(touch.x_factor)), action=None),
-            Menu.Entity(text=(lambda: "y_factor {}".format(touch.y_factor)), action=None),
-        ]
-    }
+    @structure.setter
+    def structure(self, structure):
+        self._structure = structure
+        self.reset()
 
-    menu_playback = create_menu_playback()
+    def reset(self):
+        self.ancestor.clear()
+        self.ancestor_cursor.clear()
+        self.active = self.structure
+        self.cursor_load()
+        self.state_load()
 
-    def emissivity_text():
-        return "Emissivity. {:.1f}".format(camera.emissivity)
+    def enter(self, submenu):
+        print("From level. Title: ", self.get_title())
+        self.ancestor.append(self.active)
+        self.ancestor_cursor.append(self.cursor)
+        self.active = submenu
+        print("Enter sublevel. Title: ", self.get_title())
+        self.cursor_load()
+        self.state_load()
 
-    def emissivity_down():
-        camera.emissivity -= 1.0
+    def back(self):
+        if self.ancestor:
+            print("Exit sublevel. Title: ", self.get_title())
+            self.active = self.ancestor.pop()
+        print("Back to sublevel. Title: ", self.get_title())
+        self.cursor_load(position=self.ancestor_cursor.pop())
+        self.state_load()
 
-    def emissivity_up():
-        camera.emissivity += 1.0
+    def string_callback(self, parameters):
+        if isinstance(parameters, str):
+            return parameters
+        if isinstance(parameters, tuple):
+            function, arguments = parameters
+            return function(**arguments)
+        elif callable(parameters):
+            return parameters()
+        elif isinstance(parameters, dict):
+            return self.enter(submenu=parameters)
+        elif isinstance(parameters, list):
+            for parameter in parameters:
+                self.string_callback(parameter)
 
-    def toggle_static_range():
-        camera.static_range = not camera.static_range
-        camera.thermal_configure()
+    def get_title(self):
+        if "title" in self.active:
+            string = self.string_callback(self.active["title"])
+        else:
+            string = " --- "
+        if string is None:
+            string = ""
+        return string
 
-    def string_static_range_minimum():
-        return "Static min Temp: {:.1f}".format(camera.static_minimum)
+    def generate_entity_line(self, entity):
+        if entity.text is None:
+            return ""
 
-    def static_range_minimum_down():
-        camera.static_minimum -= 1.0
-        camera.send_thermal_static_range()
+        string = "\n"
+        if isinstance(entity.text, dict):
+            raise NotImplementedError("Dictionary not allowed in text field")
+        text = self.string_callback(entity.text)
 
-    def static_range_minimum_up():
-        camera.static_minimum += 1.0
-        camera.send_thermal_static_range()
+        if text is None:
+            return string
 
-    def string_static_range_maximum():
-        return "Static max Temp: {:.1f}".format(camera.static_maximum)
+        if entity is self.cursor_entity:
+            string += "@ "
+        else:
+            string += "-  "
+        string += text
+        return string
 
-    def static_range_maximum_down():
-        camera.static_maximum -= 1.0
-        camera.send_thermal_static_range()
+    def generate_text(self):
+        string = self.get_title()
 
-    def static_range_maximum_up():
-        camera.static_maximum += 1.0
-        camera.send_thermal_static_range()
+        for name in self.entity_order:
+            if name not in self.active:
+                continue
+            string += self.generate_entity_line(self.active[name])
 
+        if self.cursor_items:
+            string += "\nOptions:"
+            for entity in self.cursor_items[self.cursor_display_start:(self.cursor_display_end+1)]:
+                string += self.generate_entity_line(entity)
 
+        return string
 
-    menu_thermal_options = {
-        "title": "THERMAL OPTIONS",
-        "shutter": menu.entity_back_no_text,
-        "top": menu.entity_scroll_up,
-        "bottom": menu.entity_scroll_down,
-        "middle": menu.entity_scroll_selection,
-        "items": [
-            Menu.Entity(text=(lambda: "Flat Field Corr. {}".format(camera.get_thermal_statistics())), action=camera.thermal_fcc),
-            Menu.Entity(text=emissivity_text, action=
-            {
-                "title": emissivity_text,
-                "shutter":  menu.entity_back_no_text,
-                "top": Menu.Entity(text="Up", action=emissivity_up),
-                "middle": menu.entity_back_action,
-                "bottom": Menu.Entity(text="Down", action=emissivity_down),
-            }),
-            Menu.Entity(text=(lambda: "Gain: {}".format(camera.string_gain_mode())), action=camera.next_gain_mode),
-            Menu.Entity(text=(lambda: "Static range: {}".format(camera.static_range)), action=toggle_static_range),
-            Menu.Entity(text=string_static_range_maximum, action=
-            {
-                "title": string_static_range_maximum,
-                "shutter":  menu.entity_back_no_text,
-                "top": Menu.Entity(text="Up", action=static_range_maximum_up),
-                "middle": menu.entity_back_action,
-                "bottom": Menu.Entity(text="Down", action=static_range_maximum_down),
-            }),
-            Menu.Entity(text=string_static_range_minimum, action=
-            {
-                "title": string_static_range_minimum,
-                "shutter":  menu.entity_back_no_text,
-                "top": Menu.Entity(text="Up", action=static_range_minimum_up),
-                "middle": menu.entity_back_action,
-                "bottom": Menu.Entity(text="Down", action=static_range_minimum_down),
-            }),
-            Menu.Entity(text="Save", action=[
-                (save_camera_settings, {"settings": settings, "camera":camera}),
-                menu.back,
-            ]),
-            Menu.Entity(text="Restart", action=[thermal.initialize]),
-        ],
-    }
-
-    def restore_backup():
-        settings.read(from_backup=True)
-        settings.write()
-
-        load_camera_slave_calibration_settings(settings=settings, camera_slave=camera_slave)
-        load_touch_calibration_settings(settings=settings, touch=touch)
-        load_camera_settings(settings=settings, camera=camera)
-
-    def save_backup():
-        save_camera_slave_calibration_settings(settings=settings, camera_slave=camera_slave)
-        save_touch_calibration_settings(settings=settings, touch=touch)
-        save_camera_settings(settings=settings, camera=camera)
-
-        settings.write()  # First make sure the current settings were saved
-        settings.write(to_backup=True)
-
-    menu_manage_settings = {
-        "title": "MANAGE SETTINGS",
-        "shutter": menu.entity_back_no_text,
-        "top": menu.entity_scroll_up,
-        "bottom": menu.entity_scroll_down,
-        "middle": menu.entity_scroll_selection,
-        "items": [
-            Menu.Entity(text="Restore Backup", action=[restore_backup, menu.back]),
-            Menu.Entity(text="Save Backup", action=[save_backup, menu.back]),
-        ],
-    }
-
-    def toggle_pixle_pointer():
-        camera.always_pixel_pointer = not camera.always_pixel_pointer
-        save_camera_settings(settings=settings, camera=camera)
-
-    menu_preview = {
-        "title": "MAIN MENU",
-        "shutter": reset_no_text,
-        "top": menu.entity_scroll_up,
-        "bottom": menu.entity_scroll_down,
-        "middle": menu.entity_scroll_selection,
-        "items": [
-            Menu.Entity(text="Thermal options", action=menu_thermal_options),
-            Menu.Entity(text=(lambda: "Always pointer: {}".format(camera.always_pixel_pointer)), action=toggle_pixle_pointer),
-            Menu.Entity(text="Calibrate Field Of View", action=menu_camera_slave_calibration),
-            Menu.Entity(text="Calibrate Touch", action=menu_touch_calibration),
-            Menu.Entity(text="Manage settings", action=menu_manage_settings),
-            Menu.Entity(text="Set Time", action=menu_time_change),
-            Menu.Entity(text=(lambda: "1 FPS {}".format(camera.fps)), action=camera.fps_reset),
-        ],
-    }
-    return menu_preview
+    def process_action(self, name):
+        if name not in self.active:
+            return False
+        entity = self.active[name]
+        if not entity.action:
+            return False
+        action = entity.action
+        return self.string_callback(action)
