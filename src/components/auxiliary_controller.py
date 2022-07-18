@@ -20,7 +20,7 @@
 #OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 #SOFTWARE.
 
-import utime
+import micropython, utime
 from pyb import Pin, ExtInt
 
 class AuxiliaryController():
